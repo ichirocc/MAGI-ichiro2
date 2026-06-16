@@ -846,11 +846,13 @@ object V6NativeOptimizer {
         val order = ArrayList<Int>(p.S)
         for (idx in 0 until p.S) order.add(idx)
         java.util.Collections.shuffle(order, rng)
-        val cov = coverage(p, schedule)
+        // Count coverage only for the selected day (O(S)) instead of all days (O(S*T)).
+        val covJ = IntArray(p.K)
+        for (i in 0 until p.S) { val k = schedule[i][j]; if (k in 0 until p.K) covJ[k]++ }
         for (k in 0 until p.K) {
             val need = p.need1[k][j]
             if (need <= 0) continue
-            var miss = need - cov[j][k]
+            var miss = need - covJ[k]
             for (i in order) {
                 if (miss <= 0) break
                 if (p.wish[i][j] >= 0 && p.wish[i][j] != k) continue

@@ -462,6 +462,18 @@ object V6NativeOptimizer {
 
     private data class PolishResult(val schedule: Array<IntArray>, val logs: List<MirrorLog>, val iterations: Long)
 
+    /**
+     * Soft-violation polish phase.
+     *
+     * Operators are split into two tiers:
+     *  - Direct-eval (ops 0-2): apply changes straight to [eval] and [cur] without copying the
+     *    full schedule. Cost = O(changed_cells × local_windows). No hf67 call.
+     *  - Copy-based (ops 3-5): create a candidate copy, apply a multi-cell operator, diff vs cur,
+     *    then apply the diff incrementally.  hf67 is only called when the current solution already
+     *    has hard violations (curHard > 0); otherwise the DeltaEvaluator guards regressions.
+     *
+     * Invariant throughout: eval.at(i,j) == cur[i][j] for every cell.
+     */
     private suspend fun hf80PostPolish(state: MagiState, initial: Array<IntArray>, seconds: Int, seed: Long): PolishResult {
         val started = nowMs()
         val rng = Random(seed)
@@ -476,41 +488,139 @@ object V6NativeOptimizer {
         var iters = 0L
         val diffBuf = IntArray(p.S * p.T)
         val deadline = nowMs() + seconds * 1000L
+
         while (nowMs() < deadline) {
             coroutineContext.ensureActive()
-            val cand = cur.copy2D()
-            when (rng.nextInt(4)) {
-                0 -> swapWithinStaff(state, cand, rng)
-                1 -> randomAllowedCell(state, cand, rng)
-                2 -> destroyRepairViolations(state, cand, bestReport, rng)
-                else -> destroyRepairDay(state, cand, rng)
-            }
-            val fixed = hf67HardRepair(state, cand, rng).schedule
-            val nDiffs = diffInto(p.T, cur, fixed, diffBuf)
-            for (idx in 0 until nDiffs) {
-                val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, fixed[flat / p.T][flat % p.T])
-            }
-            val newScore = eval.score()
-            val newHard = newScore / 1_000_000L
+            val curHard = curScore / 1_000_000L
             val bestHard = bestScore / 1_000_000L
-            if (newHard <= bestHard && (betterScore(newScore, curScore) || acceptWorseScore(newScore, curScore, 0.15, rng))) {
-                cur = fixed
-                curScore = newScore
-                if (betterScore(newScore, bestScore)) {
-                    best = fixed.copy2D()
-                    bestScore = newScore
-                    bestReport = UnifiedViolationChecker.check(state, fixed)
+
+            when (rng.nextInt(6)) {
+                // --- Direct-eval operators (no copy2D) ---
+
+                // Op 0: random allowed single cell
+                0 -> {
+                    if (p.S > 0 && p.T > 0) {
+                        val i = rng.nextInt(p.S); val j = rng.nextInt(p.T)
+                        if (p.wish[i][j] < 0) {
+                            val allowed = p.allowedShiftsForStaff(i)
+                            if (allowed.isNotEmpty()) {
+                                val oldK = eval.at(i, j)
+                                val nw = allowed[rng.nextInt(allowed.size)]
+                                eval.apply(i, j, nw)
+                                val ns = eval.score()
+                                if (ns / 1_000_000L <= bestHard && (betterScore(ns, curScore) || acceptWorseScore(ns, curScore, 0.15, rng))) {
+                                    cur[i][j] = nw; curScore = ns
+                                    if (betterScore(ns, bestScore)) { best = cur.copy2D(); bestScore = ns; bestReport = UnifiedViolationChecker.check(state, cur) }
+                                } else { eval.apply(i, j, oldK) }
+                            }
+                        }
+                    }
                 }
-            } else {
-                for (idx in 0 until nDiffs) {
-                    val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, cur[flat / p.T][flat % p.T])
+
+                // Op 1: swap two days within one staff row
+                1 -> {
+                    if (p.S > 0 && p.T >= 2) {
+                        val i = rng.nextInt(p.S)
+                        var ja = rng.nextInt(p.T); var jb = rng.nextInt(p.T)
+                        if (ja == jb) jb = (jb + 1) % p.T
+                        if (p.wish[i][ja] < 0 && p.wish[i][jb] < 0) {
+                            val ka = eval.at(i, ja); val kb = eval.at(i, jb)
+                            if (ka != kb) {
+                                eval.apply(i, ja, kb); eval.apply(i, jb, ka)
+                                val ns = eval.score()
+                                if (ns / 1_000_000L <= bestHard && (betterScore(ns, curScore) || acceptWorseScore(ns, curScore, 0.15, rng))) {
+                                    cur[i][ja] = kb; cur[i][jb] = ka; curScore = ns
+                                    if (betterScore(ns, bestScore)) { best = cur.copy2D(); bestScore = ns; bestReport = UnifiedViolationChecker.check(state, cur) }
+                                } else { eval.apply(i, ja, ka); eval.apply(i, jb, kb) }
+                            }
+                        }
+                    }
+                }
+
+                // Op 2: swap two staff members' shifts on the same day (coverage balance)
+                2 -> {
+                    if (p.S >= 2 && p.T > 0) {
+                        val j = rng.nextInt(p.T)
+                        val i1 = rng.nextInt(p.S); var i2 = rng.nextInt(p.S)
+                        if (i2 == i1) i2 = (i2 + 1) % p.S
+                        if (p.wish[i1][j] < 0 && p.wish[i2][j] < 0) {
+                            val k1 = eval.at(i1, j); val k2 = eval.at(i2, j)
+                            if (k1 != k2 && p.canDo(i1, k2) && p.canDo(i2, k1)) {
+                                eval.apply(i1, j, k2); eval.apply(i2, j, k1)
+                                val ns = eval.score()
+                                if (ns / 1_000_000L <= bestHard && (betterScore(ns, curScore) || acceptWorseScore(ns, curScore, 0.15, rng))) {
+                                    cur[i1][j] = k2; cur[i2][j] = k1; curScore = ns
+                                    if (betterScore(ns, bestScore)) { best = cur.copy2D(); bestScore = ns; bestReport = UnifiedViolationChecker.check(state, cur) }
+                                } else { eval.apply(i1, j, k1); eval.apply(i2, j, k2) }
+                            }
+                        }
+                    }
+                }
+
+                // --- Copy-based multi-cell operators ---
+                else -> {
+                    val cand = cur.copy2D()
+                    when (rng.nextInt(3)) {
+                        0 -> destroyRepairViolations(state, cand, bestReport, rng)
+                        1 -> destroyRepairDay(state, cand, rng)
+                        else -> polishCovO(p, cand, eval, rng)
+                    }
+                    // Skip hf67 when hard-feasible: DeltaEvaluator rejects any hard regression.
+                    val fixed = if (curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand
+                    val nDiffs = diffInto(p.T, cur, fixed, diffBuf)
+                    for (idx in 0 until nDiffs) {
+                        val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, fixed[flat / p.T][flat % p.T])
+                    }
+                    val ns = eval.score()
+                    if (ns / 1_000_000L <= bestHard && (betterScore(ns, curScore) || acceptWorseScore(ns, curScore, 0.15, rng))) {
+                        cur = fixed; curScore = ns
+                        if (betterScore(ns, bestScore)) { best = fixed.copy2D(); bestScore = ns; bestReport = UnifiedViolationChecker.check(state, fixed) }
+                    } else {
+                        for (idx in 0 until nDiffs) {
+                            val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, cur[flat / p.T][flat % p.T])
+                        }
+                    }
                 }
             }
+
             iters++
             if (iters % 150L == 0L) yield()
         }
         val logs = listOf(MirrorLog(iter = iters, tag = "HF80", message = "PostPolish ${nowMs() - started}ms HARD=${bestReport.hard} total=${bestReport.total}"))
         return PolishResult(best, logs, iters)
+    }
+
+    /**
+     * Targeted covO polish: find an over-covered (shift, day) using the DeltaEvaluator's per-day
+     * counts, then move one free staff member to a deficit shift on the same day (or a random
+     * allowed shift if no deficit exists).  O(S × K) per call — far cheaper than a full check().
+     */
+    private fun polishCovO(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
+        if (p.T == 0 || p.K == 0) return
+        val j = rng.nextInt(p.T)
+        // Find the most over-covered shift on this day.
+        var overK = -1; var maxOver = 0
+        for (k in 0 until p.K) {
+            val lo = p.need1[k][j]; if (lo < 0) continue
+            val hi = if (p.use2 && p.need2[k][j] >= 0) p.need2[k][j] else lo
+            val over = eval.countOnDay(k, j) - hi
+            if (over > maxOver) { maxOver = over; overK = k }
+        }
+        if (overK < 0) return
+        // Pick a staff member who can be moved (no wish lock on this day).
+        val workers = ArrayList<Int>(p.S)
+        for (i in 0 until p.S) if (schedule[i][j] == overK && p.wish[i][j] < 0) workers.add(i)
+        if (workers.isEmpty()) return
+        val i = workers[rng.nextInt(workers.size)]
+        // Prefer a deficit shift; fall back to any other allowed shift.
+        var bestNw = -1; var bestDef = Int.MIN_VALUE
+        for (k in 0 until p.K) {
+            if (k == overK || !p.canDo(i, k)) continue
+            val lo = p.need1[k][j]
+            val def = if (lo >= 0) lo - eval.countOnDay(k, j) else 0
+            if (def > bestDef) { bestDef = def; bestNw = k }
+        }
+        if (bestNw >= 0) schedule[i][j] = bestNw
     }
 
     private fun bestStaffForCoverage(p: Problem, schedule: Array<IntArray>, counts: Array<IntArray>, j: Int, k: Int): Int {

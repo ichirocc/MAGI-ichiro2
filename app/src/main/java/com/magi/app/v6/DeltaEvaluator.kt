@@ -51,6 +51,9 @@ class DeltaEvaluator(private val p: Problem, private val c3RunMode: Boolean = tr
     /** Current shift assigned at (i,j). */
     fun at(i: Int, j: Int): Int = a[i][j]
 
+    /** How many staff are on shift k on day j (used by targeted polish operators). */
+    fun countOnDay(k: Int, j: Int): Int = cntDay[k][j]
+
     /** Fused previewMove + commit for a single cell. Returns the new total score. */
     fun apply(i: Int, j: Int, nw: Int): Long {
         previewMove(i, j, nw)

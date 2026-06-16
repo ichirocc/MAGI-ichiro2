@@ -178,6 +178,13 @@ class MagiViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun applyBgResult(r: OptimizationRepository.BgResult) {
         val st0 = state ?: return
+        // 完了後に別状態を読み込んだ場合、保持された古い結果を取り違えて適用しない。
+        // 次元が現在の状態と食い違う結果は破棄する。
+        if (r.schedule.size != st0.staffCount || r.schedule.any { it.size != st0.dayCount }) {
+            OptimizationRepository.request = null
+            OptimizationRepository.publishResult(null)
+            return
+        }
         val sched = r.schedule.copy2D()
         currentSchedule = sched
         resultSchedule = sched

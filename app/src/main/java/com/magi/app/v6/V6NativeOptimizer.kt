@@ -3,7 +3,6 @@ package com.magi.app.v6
 import com.magi.app.model.MagiState
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.yield

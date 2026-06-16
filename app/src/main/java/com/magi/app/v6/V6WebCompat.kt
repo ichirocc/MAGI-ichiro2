@@ -402,8 +402,10 @@ object V6WebCompat {
 
     fun validStartMask(sequenceLength: Int, term: Int): Int {
         if (sequenceLength <= 0 || term <= 0 || sequenceLength > 31) return 0
+        // 有効な開始位置は 0..maxStart-1 の maxStart 個（=下位 maxStart ビット）。
+        // maxStart は min(31,…) で 31 に制限されるため (1 shl 31)-1 は 0x7FFFFFFF（ビット0..30）となり正しい。
         val maxStart = max(0, min(31, term - sequenceLength + 1))
-        return if (maxStart >= 31) -1 else (1 shl maxStart) - 1
+        return (1 shl maxStart) - 1
     }
 
     class MagiRNG(seed: Long) {

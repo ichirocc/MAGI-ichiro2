@@ -52,7 +52,8 @@ class OptimizationWorker(
             // 引き継ぐので、ここで running をクリアすると新しい実行の進捗が握りつぶされる。
             throw e
         } catch (e: Exception) {
-            notify("最適化に失敗しました", e.message ?: "原因不明")
+            android.util.Log.e("OptimizationWorker", "optimization failed", e)
+            notify("最適化に失敗しました", e.message ?: e.javaClass.simpleName)
             Result.failure()
         }.also {
             OptimizationRepository.setRunning(false)

@@ -61,7 +61,7 @@ object V6NativeOptimizer {
         val started = nowMs()
         lastAlternatives = emptyList()
         val chosen = chooseAlgorithm(options.algorithm, options.totalBudgetSec)
-        val p = Problem(state)
+        val p = Problem.of(state)
         var schedule = hf66DataHardening(state, normalizeSchedule(initial, p), "pre")
         schedule = hf67HardRepair(state, schedule, Random(actualSeed(options.seed) xor 0x67L)).schedule
         var logs = listOf(MirrorLog(tag = "V6Dispatcher", message = "algorithm=$chosen budget=${options.totalBudgetSec}s workers=${options.workers}"))
@@ -198,7 +198,7 @@ object V6NativeOptimizer {
     ): V6OptimizerResult {
         val started = nowMs()
         val rng = Random(actualSeed(options.seed) xor 0xA17A5L)
-        val p = Problem(state)
+        val p = Problem.of(state)
         val restarts = max(1, options.restarts)
         val per = max(1, budgetSec / restarts)
         var globalBest = normalizeSchedule(initial, p)
@@ -275,7 +275,7 @@ object V6NativeOptimizer {
     ): V6OptimizerResult {
         val started = nowMs()
         val rng = Random(actualSeed(options.seed) xor 0x451L)
-        var best = normalizeSchedule(initial, Problem(state))
+        var best = normalizeSchedule(initial, Problem.of(state))
         var bestReport = UnifiedViolationChecker.check(state, best)
         var iters = 0L
         val rounds = max(2, min(8, budgetSec / 30 + 2))
@@ -354,7 +354,7 @@ object V6NativeOptimizer {
     }
 
     private fun hf66DataHardening(state: MagiState, schedule: Array<IntArray>, tag: String): Array<IntArray> {
-        val p = Problem(state)
+        val p = Problem.of(state)
         val out = normalizeSchedule(schedule, p)
         for (i in 0 until p.S) {
             val allowed = p.allowedShiftsForStaff(i)
@@ -370,7 +370,7 @@ object V6NativeOptimizer {
     private data class RepairResult(val schedule: Array<IntArray>, val logs: List<MirrorLog>)
 
     private fun hf67HardRepair(state: MagiState, schedule: Array<IntArray>, rng: Random): RepairResult {
-        val p = Problem(state)
+        val p = Problem.of(state)
         val out = hf66DataHardening(state, schedule, "hf67")
         val logs = ArrayList<MirrorLog>()
         var changed = 0
@@ -501,7 +501,7 @@ object V6NativeOptimizer {
     }
 
     private fun destroyRepairDay(state: MagiState, schedule: Array<IntArray>, rng: Random) {
-        val p = Problem(state)
+        val p = Problem.of(state)
         if (p.T == 0) return
         val j = rng.nextInt(p.T)
         val order = ArrayList<Int>(p.S)
@@ -521,7 +521,7 @@ object V6NativeOptimizer {
     }
 
     private fun destroyRepairStaff(state: MagiState, schedule: Array<IntArray>, rng: Random) {
-        val p = Problem(state)
+        val p = Problem.of(state)
         if (p.S == 0) return
         val i = rng.nextInt(p.S)
         val allowed = p.allowedShiftsForStaff(i)
@@ -533,7 +533,7 @@ object V6NativeOptimizer {
     }
 
     private fun destroyRepairViolations(state: MagiState, schedule: Array<IntArray>, report: ViolationReport, rng: Random) {
-        val p = Problem(state)
+        val p = Problem.of(state)
         val keys = report.violations.keys.toList()
         if (keys.isEmpty()) { randomAllowedCell(state, schedule, rng); return }
         repeat(min(8, keys.size)) {
@@ -547,7 +547,7 @@ object V6NativeOptimizer {
     }
 
     private fun randomAllowedCell(state: MagiState, schedule: Array<IntArray>, rng: Random) {
-        val p = Problem(state)
+        val p = Problem.of(state)
         if (p.S == 0 || p.T == 0) return
         val i = rng.nextInt(p.S)
         val j = rng.nextInt(p.T)
@@ -557,7 +557,7 @@ object V6NativeOptimizer {
     }
 
     private fun swapWithinStaff(state: MagiState, schedule: Array<IntArray>, rng: Random) {
-        val p = Problem(state)
+        val p = Problem.of(state)
         if (p.S == 0 || p.T < 2) return
         val i = rng.nextInt(p.S)
         var a = rng.nextInt(p.T)
@@ -570,7 +570,7 @@ object V6NativeOptimizer {
     }
 
     private fun perturb(state: MagiState, base: Array<IntArray>, rng: Random, strength: Double): Array<IntArray> {
-        val p = Problem(state)
+        val p = Problem.of(state)
         val out = base.copy2D()
         val n = max(1, (p.S * p.T * strength).toInt())
         repeat(n) { randomAllowedCell(state, out, rng) }
@@ -579,7 +579,7 @@ object V6NativeOptimizer {
 
     private fun rsiGenerateHypothesis(state: MagiState, base: Array<IntArray>, report: ViolationReport, focus: String, rng: Random): Array<IntArray> {
         val out = base.copy2D()
-        val p = Problem(state)
+        val p = Problem.of(state)
         when (focus) {
             "covU", "c41" -> repeat(8) { destroyRepairDay(state, out, rng) }
             "low", "high", "c2" -> repeat(8) { destroyRepairStaff(state, out, rng) }

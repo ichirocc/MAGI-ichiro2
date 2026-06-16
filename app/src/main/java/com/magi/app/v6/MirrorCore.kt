@@ -63,7 +63,7 @@ object UnifiedViolationChecker {
 
     fun check(state: MagiState, schedule: Array<IntArray> = state.schedule.toIntArray2D()): ViolationReport {
         val t0 = System.nanoTime()
-        val p = Problem(state)
+        val p = Problem.of(state)
         val s = normalizeSchedule(schedule, p)
         val breakdown = linkedMapOf<String, Int>()
         for (key0 in MirrorKeys.all) breakdown[key0] = 0

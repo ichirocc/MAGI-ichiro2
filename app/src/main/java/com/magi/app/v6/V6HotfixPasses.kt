@@ -101,7 +101,7 @@ object V6HotfixPasses {
         maxCycles: Int = 3,
         seed: Long = System.nanoTime(),
     ): HF80Result {
-        val p = Problem(state)
+        val p = Problem.of(state)
         val rng = Random(seed)
         val before = UnifiedViolationChecker.check(state, schedule)
         var best = normalizeSchedule(schedule, p)
@@ -141,7 +141,7 @@ object V6HotfixPasses {
     }
 
     fun applyHF67InterStaffSwap(state: MagiState, schedule: Array<IntArray>, maxSwaps: Int = 30): HF67Result {
-        val p = Problem(state)
+        val p = Problem.of(state)
         var work = normalizeSchedule(schedule, p)
         val before = UnifiedViolationChecker.check(state, work)
         var current = before
@@ -199,7 +199,7 @@ object V6HotfixPasses {
     }
 
     fun applyHF66IntraStaffRedistribution(state: MagiState, schedule: Array<IntArray>, maxMoves: Int = 30): HF66Result {
-        val p = Problem(state)
+        val p = Problem.of(state)
         var work = normalizeSchedule(schedule, p)
         val before = UnifiedViolationChecker.check(state, work)
         var current = before
@@ -314,7 +314,7 @@ object V6HotfixPasses {
     }
 
     private fun localPairwiseStaffSwap(state: MagiState, schedule: Array<IntArray>, maxSwaps: Int): Triple<Array<IntArray>, Int, Int> {
-        val p = Problem(state)
+        val p = Problem.of(state)
         var work = schedule.copy2D()
         var current = UnifiedViolationChecker.check(state, work)
         var applied = 0
@@ -341,7 +341,7 @@ object V6HotfixPasses {
     }
 
     private fun localBestImprovement(state: MagiState, schedule: Array<IntArray>, tries: Int, rng: Random): Array<IntArray> {
-        val p = Problem(state)
+        val p = Problem.of(state)
         var best = schedule.copy2D()
         var bestReport = UnifiedViolationChecker.check(state, best)
         var t = 0
@@ -374,7 +374,7 @@ object V6HotfixPasses {
     }
 
     private fun invalidAssignmentCount(state: MagiState, schedule: Array<IntArray>): Int {
-        val p = Problem(state)
+        val p = Problem.of(state)
         val s = normalizeSchedule(schedule, p)
         var n = 0
         for (i in 0 until p.S) for (j in 0 until p.T) {

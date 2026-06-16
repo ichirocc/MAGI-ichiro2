@@ -1,0 +1,102 @@
+name: Android SDK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+jobs:
+  android-sdk:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Install Gradle 8.7
+        shell: bash
+        run: |
+          wget -q -O /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          mkdir -p "$HOME/gradle-dist"
+          unzip -q /tmp/gradle.zip -d "$HOME/gradle-dist"
+          echo "$HOME/gradle-dist/gradle-8.7/bin" >> "$GITHUB_PATH"
+
+      - name: Show Android SDK versions
+        run: sdkmanager --list_installed || true
+
+      - name: Show Gradle CLI
+        run: gradle --version
+
+      - name: Build debug and release APKs
+        shell: bash
+        run: |
+          set +e
+          gradle assembleDebug assembleRelease --stacktrace > build-debug.log 2>&1
+          code=$?
+          cat build-debug.log
+          echo "$code" > build-exit-code.txt
+
+      - name: Show build error summary
+        if: ${{ always() }}
+        shell: bash
+        run: |
+          echo "===== Build error summary ====="
+          grep -n -E "(^e:|error:|FAILURE:|What went wrong|Unresolved reference|Compilation error|Execution failed|command not found)" build-debug.log | head -120 || true
+          echo "===== Last 120 log lines ====="
+          tail -120 build-debug.log || true
+
+      - name: Upload build log
+        uses: actions/upload-artifact@v4
+        if: ${{ always() }}
+        with:
+          name: build-debug-log
+          path: build-debug.log
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        if: ${{ always() && hashFiles('**/build/outputs/apk/debug/**/*.apk') != '' }}
+        with:
+          name: android-debug-apk
+          path: "**/build/outputs/apk/debug/**/*.apk"
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        if: ${{ always() && hashFiles('**/build/outputs/apk/release/**/*.apk') != '' }}
+        with:
+          name: android-release-apk
+          path: "**/build/outputs/apk/release/**/*.apk"
+
+      - name: Upload any APK fallback
+        uses: actions/upload-artifact@v4
+        if: ${{ always() && hashFiles('**/build/outputs/apk/**/*.apk') != '' }}
+        with:
+          name: android-apk-all
+          path: "**/build/outputs/apk/**/*.apk"
+
+      - name: Fail if build failed
+        shell: bash
+        run: |
+          code="$(cat build-exit-code.txt)"
+          if [ "$code" != "0" ]; then
+            echo "===== Build failed. Open this red step for the summary. ====="
+            grep -n -E "(^e:|error:|FAILURE:|What went wrong|Unresolved reference|Compilation error|Execution failed|command not found)" build-debug.log | head -120 || true
+            echo "===== Last 120 log lines ====="
+            tail -120 build-debug.log || true
+          fi
+          exit "$code"

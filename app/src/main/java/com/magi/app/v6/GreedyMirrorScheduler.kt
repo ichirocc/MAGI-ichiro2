@@ -1,0 +1,134 @@
+package com.magi.app.v6
+
+import com.magi.app.model.MagiState
+import java.text.SimpleDateFormat
+import java.util.Locale
+import java.util.Random
+import kotlin.math.exp
+import kotlin.math.max
+
+/**
+ * Kotlin port of magi_python_mirror.py.
+ *
+ * The high-speed native SA remains the main optimizer, but this module brings the
+ * mirror app's operational layer into the Android app: unified violation breakdown,
+ * greedy/simple schedule creation, light local search, and CSV round-trip helpers.
+ */
+object GreedyMirrorScheduler {
+    fun generate(state: MagiState): ScheduleRunResult {
+        val t0 = System.nanoTime()
+        val p = Problem(state)
+        if (p.T <= 0 || p.S <= 0 || p.K <= 0) throw IllegalArgumentException("期間/スタッフ/シフトが不足しています")
+        val restK = restShiftIndex(state)
+        val existing = state.schedule.toIntArray2D()
+        var filled = 0
+        for (row in existing) for (v in row) if (v >= 0) filled++
+        val schedule: Array<IntArray>
+        val baseMode: String
+        var wishIn = 0
+        var wishOut = 0
+        if (filled >= max(1, p.S * p.T / 2)) {
+            schedule = normalizeSchedule(existing, p)
+            baseMode = "既存表ベース"
+        } else {
+            schedule = Array(p.S) { IntArray(p.T) { -1 } }
+            baseMode = "空表ベース"
+            for (i in 0 until p.S) for (j in 0 until p.T) {
+                val w = p.wish[i][j]
+                if (w in 0 until p.K) {
+                    schedule[i][j] = w
+                    if (p.canDo(i, w)) wishIn++ else wishOut++
+                }
+            }
+        }
+
+        var counts = countMatrix(p, schedule)
+        for (i in 0 until p.S) {
+            val allowed = p.allowedShiftsForStaff(i)
+            val free = ArrayList<Int>()
+            for (jj in 0 until p.T) if (schedule[i][jj] < 0) free.add(jj)
+            var pos = 0
+            for (k in allowed) {
+                val lo = p.rangeLo[i][k].takeIf { it != Int.MIN_VALUE } ?: 0
+                var need = max(0, lo - counts[i][k])
+                while (need > 0 && pos < free.size) {
+                    val j = free[pos++]
+                    schedule[i][j] = k
+                    counts[i][k]++
+                    need--
+                }
+            }
+        }
+
+        counts = countMatrix(p, schedule)
+        var cov = coverage(p, schedule)
+        for (j in 0 until p.T) {
+            val demandOrder = ArrayList<Pair<Int, Int>>()
+            for (k in 0 until p.K) {
+                val lo = p.need1[k][j]
+                if (lo >= 0 && lo > cov[j][k]) demandOrder.add((lo - cov[j][k]) to k)
+            }
+            demandOrder.sortWith { a, b ->
+                val d = b.first.compareTo(a.first)
+                if (d != 0) d else a.second.compareTo(b.second)
+            }
+            for (pair in demandOrder) {
+                val k = pair.second
+                val lo = p.need1[k][j]
+                if (lo < 0) continue
+                while (cov[j][k] < lo) {
+                    var bestI = -1
+                    var bestPenalty = Int.MAX_VALUE
+                    for (i in 0 until p.S) {
+                        if (schedule[i][j] >= 0 || !p.canDo(i, k)) continue
+                        val hi = p.rangeHi[i][k]
+                        val over = hi != Int.MAX_VALUE && counts[i][k] >= hi
+                        val penalty = (if (over) 1000 else 0) + counts[i][k] * 2
+                        if (penalty < bestPenalty) {
+                            bestPenalty = penalty
+                            bestI = i
+                        }
+                    }
+                    if (bestI < 0) break
+                    schedule[bestI][j] = k
+                    counts[bestI][k]++
+                    cov[j][k]++
+                }
+            }
+        }
+
+        counts = countMatrix(p, schedule)
+        for (i in 0 until p.S) {
+            val allowed = p.allowedShiftsForStaff(i)
+            for (j in 0 until p.T) {
+                if (schedule[i][j] >= 0) continue
+                var bestK = allowed.firstOrNull() ?: restK
+                var bestPenalty = Int.MAX_VALUE
+                for (k in allowed) {
+                    val hi = p.rangeHi[i][k]
+                    val over = hi != Int.MAX_VALUE && counts[i][k] >= hi
+                    val needLo = p.need1[k][j]
+                    var covNow = 0
+                    for (ii in 0 until p.S) if (schedule[ii][j] == k) covNow++
+                    val demandBonus = if (needLo >= 0 && covNow < needLo) -100 else 0
+                    val restBonus = if (k == restK) -10 else 0
+                    val penalty = (if (over) 1000 else 0) + counts[i][k] + restBonus + demandBonus
+                    if (penalty < bestPenalty) {
+                        bestPenalty = penalty
+                        bestK = k
+                    }
+                }
+                schedule[i][j] = bestK
+                counts[i][bestK]++
+            }
+        }
+
+        val report = UnifiedViolationChecker.check(state, schedule)
+        val elapsedMs = ((System.nanoTime() - t0) / 1_000_000L)
+        val log = MirrorLog(
+            tag = "GenerateInitial",
+            message = "簡易作成完了($baseMode): HARD=${report.hard} total=${report.total} 希望seed=${wishIn}件/担当外=${wishOut}件 (${elapsedMs}ms)",
+        )
+        return ScheduleRunResult(schedule, report.copy(logs = listOf(log) + report.logs))
+    }
+}

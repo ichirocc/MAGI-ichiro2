@@ -1,0 +1,81 @@
+name: V6 Engine Check
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - claude/code-review-0gu5p3
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v6-engine-check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  v6-engine-check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Install Android SDK packages
+        run: sdkmanager "platform-tools" "platforms;android-35" "platforms;android-36" "build-tools;35.0.0"
+
+      - name: Install Gradle 8.7
+        shell: bash
+        run: |
+          wget -q -O /tmp/gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          mkdir -p "$HOME/gradle-dist"
+          unzip -q /tmp/gradle.zip -d "$HOME/gradle-dist"
+          echo "$HOME/gradle-dist/gradle-8.7/bin" >> "$GITHUB_PATH"
+
+      - name: Run unit tests (engine + v6)
+        shell: bash
+        run: |
+          mkdir -p build/ci-logs
+          set -o pipefail
+          gradle testDebugUnitTest --stacktrace 2>&1 | tee build/ci-logs/testDebugUnitTest.log
+
+      - name: Assemble debug APK
+        shell: bash
+        run: |
+          mkdir -p build/ci-logs
+          set -o pipefail
+          gradle assembleDebug --stacktrace 2>&1 | tee build/ci-logs/assembleDebug.log
+
+      - name: Upload CI logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v6-engine-ci-logs
+          path: build/ci-logs
+          if-no-files-found: ignore
+
+      - name: Upload debug APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v6-debug-apk
+          path: "**/build/outputs/apk/debug/**/*.apk"
+          if-no-files-found: ignore
+

@@ -709,10 +709,11 @@ object V6NativeOptimizer {
             if (over > maxOver) { maxOver = over; overK = k }
         }
         if (overK < 0) return null
-        val workers = ArrayList<Int>(p.S)
-        for (i in 0 until p.S) if (eval.at(i, j) == overK && p.wish[i][j] < 0) workers.add(i)
-        if (workers.isEmpty()) return null
-        val i = workers[rng.nextInt(workers.size)]
+        var wCnt = 0
+        for (i in 0 until p.S) if (eval.at(i, j) == overK && p.wish[i][j] < 0) wCnt++
+        if (wCnt == 0) return null
+        var pickW = rng.nextInt(wCnt); var i = 0
+        for (ii in 0 until p.S) if (eval.at(ii, j) == overK && p.wish[ii][j] < 0) { if (pickW-- == 0) { i = ii; break } }
         var bestNw = -1; var bestDef = Int.MIN_VALUE
         for (k in 0 until p.K) {
             if (k == overK || !p.canDo(i, k)) continue
@@ -726,33 +727,31 @@ object V6NativeOptimizer {
     private fun findC2Fix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
         if (p.cons2.isEmpty()) return null
         val c = p.cons2[rng.nextInt(p.cons2.size)]
-        val defStaff = ArrayList<Int>(p.S)
-        for (i in 0 until p.S) {
-            if (!p.canDo(i, c.shiftIdx)) continue
-            if (eval.countForStaff(i, c.shiftIdx) < c.count) defStaff.add(i)
-        }
-        if (defStaff.isEmpty()) return null
-        val i = defStaff[rng.nextInt(defStaff.size)]
-        val days = ArrayList<Int>(p.T)
-        for (j in 0 until p.T) if (eval.at(i, j) != c.shiftIdx && p.wish[i][j] < 0) days.add(j)
-        if (days.isEmpty()) return null
-        return intArrayOf(i, days[rng.nextInt(days.size)], c.shiftIdx)
+        var dCnt = 0
+        for (i in 0 until p.S) { if (!p.canDo(i, c.shiftIdx)) continue; if (eval.countForStaff(i, c.shiftIdx) < c.count) dCnt++ }
+        if (dCnt == 0) return null
+        var pickI = rng.nextInt(dCnt); var stf = 0
+        for (i in 0 until p.S) { if (!p.canDo(i, c.shiftIdx)) continue; if (eval.countForStaff(i, c.shiftIdx) < c.count) { if (pickI-- == 0) { stf = i; break } } }
+        var dayCnt = 0
+        for (j in 0 until p.T) if (eval.at(stf, j) != c.shiftIdx && p.wish[stf][j] < 0) dayCnt++
+        if (dayCnt == 0) return null
+        var pickJ = rng.nextInt(dayCnt); var day = 0
+        for (j in 0 until p.T) if (eval.at(stf, j) != c.shiftIdx && p.wish[stf][j] < 0) { if (pickJ-- == 0) { day = j; break } }
+        return intArrayOf(stf, day, c.shiftIdx)
     }
 
     private fun findRangeLowFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
-        val cands = ArrayList<Long>(p.S * p.K)
-        for (i in 0 until p.S) for (k in 0 until p.K) {
-            val lo = p.rangeLo[i][k]
-            if (lo == Int.MIN_VALUE || !p.canDo(i, k)) continue
-            if (eval.countForStaff(i, k) < lo) cands.add(i.toLong() * p.K + k)
-        }
-        if (cands.isEmpty()) return null
-        val packed = cands[rng.nextInt(cands.size)]
-        val i = (packed / p.K).toInt(); val k = (packed % p.K).toInt()
-        val days = ArrayList<Int>(p.T)
-        for (j in 0 until p.T) if (eval.at(i, j) != k && p.wish[i][j] < 0) days.add(j)
-        if (days.isEmpty()) return null
-        return intArrayOf(i, days[rng.nextInt(days.size)], k)
+        var cCnt = 0
+        for (i in 0 until p.S) for (k in 0 until p.K) { val lo = p.rangeLo[i][k]; if (lo == Int.MIN_VALUE || !p.canDo(i, k)) continue; if (eval.countForStaff(i, k) < lo) cCnt++ }
+        if (cCnt == 0) return null
+        var pickC = rng.nextInt(cCnt); var rlI = 0; var rlK = 0
+        outer@ for (i in 0 until p.S) for (k in 0 until p.K) { val lo = p.rangeLo[i][k]; if (lo == Int.MIN_VALUE || !p.canDo(i, k)) continue; if (eval.countForStaff(i, k) < lo) { if (pickC-- == 0) { rlI = i; rlK = k; break@outer } } }
+        var dayCnt = 0
+        for (j in 0 until p.T) if (eval.at(rlI, j) != rlK && p.wish[rlI][j] < 0) dayCnt++
+        if (dayCnt == 0) return null
+        var pickJ = rng.nextInt(dayCnt); var day = 0
+        for (j in 0 until p.T) if (eval.at(rlI, j) != rlK && p.wish[rlI][j] < 0) { if (pickJ-- == 0) { day = j; break } }
+        return intArrayOf(rlI, day, rlK)
     }
 
     private fun findC41Fix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
@@ -763,37 +762,47 @@ object V6NativeOptimizer {
         for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) == c.shiftIdx) cnt++
         return when {
             cnt > c.u -> {
-                val workers = ArrayList<Int>(p.S)
-                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) == c.shiftIdx && p.wish[i][j] < 0) workers.add(i)
-                if (workers.isEmpty()) return null
-                val i = workers[rng.nextInt(workers.size)]
-                val other = p.allowedShiftsForStaff(i).filter { it != c.shiftIdx }
-                if (other.isEmpty()) null else intArrayOf(i, j, other[rng.nextInt(other.size)])
+                var wCnt = 0
+                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) == c.shiftIdx && p.wish[i][j] < 0) wCnt++
+                if (wCnt == 0) return null
+                var pickW = rng.nextInt(wCnt); var ci = 0
+                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) == c.shiftIdx && p.wish[i][j] < 0) { if (pickW-- == 0) { ci = i; break } }
+                val allowed41 = p.allowedShiftsForStaff(ci)
+                var oCnt = 0; for (ak in allowed41) if (ak != c.shiftIdx) oCnt++
+                if (oCnt == 0) return null
+                var pickK = rng.nextInt(oCnt); var nwK = 0
+                for (ak in allowed41) if (ak != c.shiftIdx) { if (pickK-- == 0) { nwK = ak; break } }
+                intArrayOf(ci, j, nwK)
             }
             cnt < c.l -> {
-                val avail = ArrayList<Int>(p.S)
-                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) != c.shiftIdx && p.wish[i][j] < 0 && p.canDo(i, c.shiftIdx)) avail.add(i)
-                if (avail.isEmpty()) null else intArrayOf(avail[rng.nextInt(avail.size)], j, c.shiftIdx)
+                var aCnt = 0
+                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) != c.shiftIdx && p.wish[i][j] < 0 && p.canDo(i, c.shiftIdx)) aCnt++
+                if (aCnt == 0) return null
+                var pickA = rng.nextInt(aCnt); var ai = 0
+                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) != c.shiftIdx && p.wish[i][j] < 0 && p.canDo(i, c.shiftIdx)) { if (pickA-- == 0) { ai = i; break } }
+                intArrayOf(ai, j, c.shiftIdx)
             }
             else -> null
         }
     }
 
     private fun findRangeHighFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
-        val cands = ArrayList<Long>(p.S * p.K)
-        for (i in 0 until p.S) for (k in 0 until p.K) {
-            val hi = p.rangeHi[i][k]; if (hi == Int.MAX_VALUE) continue
-            if (eval.countForStaff(i, k) > hi) cands.add(i.toLong() * p.K + k)
-        }
-        if (cands.isEmpty()) return null
-        val packed = cands[rng.nextInt(cands.size)]
-        val i = (packed / p.K).toInt(); val k = (packed % p.K).toInt()
-        val days = ArrayList<Int>(p.T)
-        for (j in 0 until p.T) if (eval.at(i, j) == k && p.wish[i][j] < 0) days.add(j)
-        if (days.isEmpty()) return null
-        val j = days[rng.nextInt(days.size)]
-        val other = p.allowedShiftsForStaff(i).filter { it != k }
-        return if (other.isNotEmpty()) intArrayOf(i, j, other[rng.nextInt(other.size)]) else null
+        var cCnt = 0
+        for (i in 0 until p.S) for (k in 0 until p.K) { val hi = p.rangeHi[i][k]; if (hi == Int.MAX_VALUE) continue; if (eval.countForStaff(i, k) > hi) cCnt++ }
+        if (cCnt == 0) return null
+        var pickC = rng.nextInt(cCnt); var rhI = 0; var rhK = 0
+        outer@ for (i in 0 until p.S) for (k in 0 until p.K) { val hi = p.rangeHi[i][k]; if (hi == Int.MAX_VALUE) continue; if (eval.countForStaff(i, k) > hi) { if (pickC-- == 0) { rhI = i; rhK = k; break@outer } } }
+        var dayCnt = 0
+        for (j in 0 until p.T) if (eval.at(rhI, j) == rhK && p.wish[rhI][j] < 0) dayCnt++
+        if (dayCnt == 0) return null
+        var pickJ = rng.nextInt(dayCnt); var day = 0
+        for (j in 0 until p.T) if (eval.at(rhI, j) == rhK && p.wish[rhI][j] < 0) { if (pickJ-- == 0) { day = j; break } }
+        val allowed = p.allowedShiftsForStaff(rhI)
+        var oCnt = 0; for (ak in allowed) if (ak != rhK) oCnt++
+        if (oCnt == 0) return null
+        var pickK = rng.nextInt(oCnt); var nwK = 0
+        for (ak in allowed) if (ak != rhK) { if (pickK-- == 0) { nwK = ak; break } }
+        return intArrayOf(rhI, day, nwK)
     }
 
     /**

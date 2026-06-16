@@ -48,11 +48,13 @@ class OptimizationWorker(
             notifyDone(res.report.hard, res.report.total)
             Result.success()
         } catch (e: CancellationException) {
+            // REPLACE による差し替え時のみ発生する。後続ワーカーが running=true を立てて
+            // 引き継ぐので、ここで running をクリアすると新しい実行の進捗が握りつぶされる。
             throw e
         } catch (e: Exception) {
             notify("最適化に失敗しました", e.message ?: "原因不明")
             Result.failure()
-        } finally {
+        }.also {
             OptimizationRepository.setRunning(false)
         }
     }

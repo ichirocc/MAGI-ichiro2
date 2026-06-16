@@ -224,9 +224,9 @@ object V6NativeOptimizer {
             // [Adaptive LNS] learned operator weights (roulette-wheel selection + reaction-factor
             // update), per Ropke & Pisinger and recent adaptive-LNS personnel-scheduling work
             // (Ouberkouk, Boufflet & Moukrim, J. Heuristics 2023). Replaces uniform operator choice.
-            val opW = DoubleArray(6) { 1.0 }
-            val opScore = DoubleArray(6)
-            val opCnt = IntArray(6)
+            val opW = DoubleArray(7) { 1.0 }
+            val opScore = DoubleArray(7)
+            val opCnt = IntArray(7)
             var sinceUpdate = 0
             while (nowMs() < deadline) {
                 coroutineContext.ensureActive()
@@ -235,10 +235,10 @@ object V6NativeOptimizer {
                 val curHard = curScore / 1_000_000L
                 var reward = 0.2   // default: rejected
 
-                // ── Direct-eval path (ops 3/4/5): no copy2D, no diffInto ──
+                // ── Direct-eval path (ops 3-6): no copy2D, no diffInto ──
                 // Applies the move straight to eval+cur; reverts on rejection.
                 // Invariant: eval.at(i,j) == cur[i][j] for all cells at all times.
-                if (op == 3 || op == 4 || op == 5) {
+                if (op in 3..6) {
                     var moved = false
                     if (op == 3 && p.S > 0 && p.T >= 2) {          // swapWithinStaff
                         val i = rng.nextInt(p.S)
@@ -285,6 +285,23 @@ object V6NativeOptimizer {
                                 if (ig) { globalBest = cur.copy2D(); globalScore = ns; globalReport = UnifiedViolationChecker.check(state, cur) }
                                 reward = if (ig) 4.0 else if (ic) 2.0 else 1.0
                             } else { eval.apply(fix[0], fix[1], oldK) }
+                        }
+                    } else if (op == 6 && p.S >= 2 && p.T > 0) {   // swapTwoStaffSameDay (coverage-neutral)
+                        val j = rng.nextInt(p.T)
+                        val i1 = rng.nextInt(p.S); var i2 = rng.nextInt(p.S)
+                        if (i2 == i1) i2 = (i2 + 1) % p.S
+                        if (p.wish[i1][j] < 0 && p.wish[i2][j] < 0) {
+                            val k1 = eval.at(i1, j); val k2 = eval.at(i2, j)
+                            if (k1 != k2 && p.canDo(i1, k2) && p.canDo(i2, k1)) {
+                                eval.apply(i1, j, k2); eval.apply(i2, j, k1); moved = true
+                                val ns = eval.score()
+                                val ig = betterScore(ns, globalScore); val ic = betterScore(ns, curScore)
+                                if (ic || acceptWorseScore(ns, curScore, temp, rng)) {
+                                    cur[i1][j] = k2; cur[i2][j] = k1; curScore = ns
+                                    if (ig) { globalBest = cur.copy2D(); globalScore = ns; globalReport = UnifiedViolationChecker.check(state, cur) }
+                                    reward = if (ig) 4.0 else if (ic) 2.0 else 1.0
+                                } else { eval.apply(i1, j, k1); eval.apply(i2, j, k2) }
+                            }
                         }
                     }
                     if (moved) { opScore[op] += reward; opCnt[op]++ }

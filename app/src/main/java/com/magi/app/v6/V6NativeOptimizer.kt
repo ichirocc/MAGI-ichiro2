@@ -772,21 +772,19 @@ object V6NativeOptimizer {
     private fun polishRangeHigh(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findRangeHighFix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
 
     /**
-     * Targeted C3 wanted-sequence polish: pick a random C3/C3m pattern, scan for a window where
-     * exactly one shift is missing (D-1 of D match), and fill the gap.  Directly attacks c3/c3m
-     * soft violations one completion at a time.
+     * Targeted C3/C3m wanted-sequence polish: scan for a window that is one shift away from
+     * completion (D-1 of D elements match) and return the missing cell, or null.
      */
-    private fun polishC3Want(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
+    private fun findC3WantFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
         val list = when {
             p.cons3.isNotEmpty() && p.cons3m.isNotEmpty() -> if (rng.nextBoolean()) p.cons3 else p.cons3m
             p.cons3.isNotEmpty() -> p.cons3
             p.cons3m.isNotEmpty() -> p.cons3m
-            else -> return
+            else -> return null
         }
         val c = list[rng.nextInt(list.size)]
         val seq = c.seq; val D = seq.size
-        if (D < 2 || D > p.T) return
-        // Scan all staff rows; return as soon as the first fixable near-match is found.
+        if (D < 2 || D > p.T) return null
         val iStart = rng.nextInt(p.S)
         for (di in 0 until p.S) {
             val i = (iStart + di) % p.S
@@ -799,16 +797,15 @@ object V6NativeOptimizer {
                     }
                     if (miss == 1 && missL >= 0) {
                         val ml = j + missL
-                        if (p.wish[i][ml] < 0 && p.canDo(i, seq[missL])) {
-                            schedule[i][ml] = seq[missL]
-                            return
-                        }
+                        if (p.wish[i][ml] < 0 && p.canDo(i, seq[missL])) return intArrayOf(i, ml, seq[missL])
                     }
                 }
                 j++
             }
         }
+        return null
     }
+    private fun polishC3Want(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findC3WantFix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
 
     private fun bestStaffForCoverage(p: Problem, schedule: Array<IntArray>, counts: Array<IntArray>, j: Int, k: Int): Int {
         var bestI = -1

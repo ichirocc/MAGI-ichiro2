@@ -10,3 +10,4 @@ local.properties
 tools/*.png
 tools/*.pdf
 tools/*.xlsx
+local.properties

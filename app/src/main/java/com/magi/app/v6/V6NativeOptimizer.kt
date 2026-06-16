@@ -560,10 +560,12 @@ object V6NativeOptimizer {
                 // --- Copy-based multi-cell operators ---
                 else -> {
                     val cand = cur.copy2D()
-                    when (rng.nextInt(3)) {
+                    when (rng.nextInt(5)) {
                         0 -> destroyRepairViolations(state, cand, bestReport, rng)
                         1 -> destroyRepairDay(state, cand, rng)
-                        else -> polishCovO(p, cand, eval, rng)
+                        2 -> polishCovO(p, cand, eval, rng)
+                        3 -> polishC2(p, cand, eval, rng)
+                        else -> polishRangeLow(p, cand, eval, rng)
                     }
                     // Skip hf67 when hard-feasible: DeltaEvaluator rejects any hard regression.
                     val fixed = if (curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand
@@ -621,6 +623,48 @@ object V6NativeOptimizer {
             if (def > bestDef) { bestDef = def; bestNw = k }
         }
         if (bestNw >= 0) schedule[i][j] = bestNw
+    }
+
+    /**
+     * Targeted c2 polish: pick a C2 constraint where a random staff member is below the required
+     * shift count, then assign the needed shift on one free (non-wish-locked) day.
+     */
+    private fun polishC2(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
+        if (p.cons2.isEmpty()) return
+        val c = p.cons2[rng.nextInt(p.cons2.size)]
+        val defStaff = ArrayList<Int>(p.S)
+        for (i in 0 until p.S) {
+            if (!p.canDo(i, c.shiftIdx)) continue
+            var cnt = 0; for (j in 0 until p.T) if (eval.at(i, j) == c.shiftIdx) cnt++
+            if (cnt < c.count) defStaff.add(i)
+        }
+        if (defStaff.isEmpty()) return
+        val i = defStaff[rng.nextInt(defStaff.size)]
+        val days = ArrayList<Int>(p.T)
+        for (j in 0 until p.T) if (eval.at(i, j) != c.shiftIdx && p.wish[i][j] < 0) days.add(j)
+        if (days.isEmpty()) return
+        schedule[i][days[rng.nextInt(days.size)]] = c.shiftIdx
+    }
+
+    /**
+     * Targeted rangeLo polish: pick a (staff, shift) pair where the count is below rangeLo, then
+     * assign that shift on one free day.
+     */
+    private fun polishRangeLow(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
+        val cands = ArrayList<Long>(p.S * p.K)   // packed i*K+k
+        for (i in 0 until p.S) for (k in 0 until p.K) {
+            val lo = p.rangeLo[i][k]
+            if (lo == Int.MIN_VALUE || !p.canDo(i, k)) continue
+            var cnt = 0; for (j in 0 until p.T) if (eval.at(i, j) == k) cnt++
+            if (cnt < lo) cands.add(i.toLong() * p.K + k)
+        }
+        if (cands.isEmpty()) return
+        val packed = cands[rng.nextInt(cands.size)]
+        val i = (packed / p.K).toInt(); val k = (packed % p.K).toInt()
+        val days = ArrayList<Int>(p.T)
+        for (j in 0 until p.T) if (eval.at(i, j) != k && p.wish[i][j] < 0) days.add(j)
+        if (days.isEmpty()) return
+        schedule[i][days[rng.nextInt(days.size)]] = k
     }
 
     private fun bestStaffForCoverage(p: Problem, schedule: Array<IntArray>, counts: Array<IntArray>, j: Int, k: Int): Int {

@@ -610,78 +610,9 @@ object V6NativeOptimizer {
                 }
 
                 // Op 3: targeted covO fix — direct-eval
-                3 -> {
-                    val fix = findCovOFix(p, eval, rng)
-                    if (fix != null) {
-                        val oldK = eval.at(fix[0], fix[1])
-                        eval.apply(fix[0], fix[1], fix[2])
-                        val ns = eval.score()
-                        if (ns / 1_000_000L <= bestHard && (betterScore(ns, curScore) || acceptWorseScore(ns, curScore, 0.15, rng))) {
-                            cur[fix[0]][fix[1]] = fix[2]; curScore = ns
-                            if (betterScore(ns, bestScore)) { best = cur.copy2D(); bestScore = ns; bestReport = UnifiedViolationChecker.check(state, cur) }
-                        } else { eval.apply(fix[0], fix[1], oldK) }
-                    }
-                }
-
-                // Op 4: targeted c2 fix — direct-eval
-                4 -> {
-                    val fix = findC2Fix(p, eval, rng)
-                    if (fix != null) {
-                        val oldK = eval.at(fix[0], fix[1])
-                        eval.apply(fix[0], fix[1], fix[2])
-                        val ns = eval.score()
-                        if (ns / 1_000_000L <= bestHard && (betterScore(ns, curScore) || acceptWorseScore(ns, curScore, 0.15, rng))) {
-                            cur[fix[0]][fix[1]] = fix[2]; curScore = ns
-                            if (betterScore(ns, bestScore)) { best = cur.copy2D(); bestScore = ns; bestReport = UnifiedViolationChecker.check(state, cur) }
-                        } else { eval.apply(fix[0], fix[1], oldK) }
-                    }
-                }
-
-                // Op 5: targeted rangeLow fix — direct-eval
-                5 -> {
-                    val fix = findRangeLowFix(p, eval, rng)
-                    if (fix != null) {
-                        val oldK = eval.at(fix[0], fix[1])
-                        eval.apply(fix[0], fix[1], fix[2])
-                        val ns = eval.score()
-                        if (ns / 1_000_000L <= bestHard && (betterScore(ns, curScore) || acceptWorseScore(ns, curScore, 0.15, rng))) {
-                            cur[fix[0]][fix[1]] = fix[2]; curScore = ns
-                            if (betterScore(ns, bestScore)) { best = cur.copy2D(); bestScore = ns; bestReport = UnifiedViolationChecker.check(state, cur) }
-                        } else { eval.apply(fix[0], fix[1], oldK) }
-                    }
-                }
-
-                // Op 6: targeted c3/c3m pattern completion — direct-eval
-                6 -> {
-                    val fix = findC3WantFix(p, eval, rng)
-                    if (fix != null) {
-                        val oldK = eval.at(fix[0], fix[1])
-                        eval.apply(fix[0], fix[1], fix[2])
-                        val ns = eval.score()
-                        if (ns / 1_000_000L <= bestHard && (betterScore(ns, curScore) || acceptWorseScore(ns, curScore, 0.15, rng))) {
-                            cur[fix[0]][fix[1]] = fix[2]; curScore = ns
-                            if (betterScore(ns, bestScore)) { best = cur.copy2D(); bestScore = ns; bestReport = UnifiedViolationChecker.check(state, cur) }
-                        } else { eval.apply(fix[0], fix[1], oldK) }
-                    }
-                }
-
-                // Op 7: targeted c41 group/day range fix — direct-eval
-                7 -> {
-                    val fix = findC41Fix(p, eval, rng)
-                    if (fix != null) {
-                        val oldK = eval.at(fix[0], fix[1])
-                        eval.apply(fix[0], fix[1], fix[2])
-                        val ns = eval.score()
-                        if (ns / 1_000_000L <= bestHard && (betterScore(ns, curScore) || acceptWorseScore(ns, curScore, 0.15, rng))) {
-                            cur[fix[0]][fix[1]] = fix[2]; curScore = ns
-                            if (betterScore(ns, bestScore)) { best = cur.copy2D(); bestScore = ns; bestReport = UnifiedViolationChecker.check(state, cur) }
-                        } else { eval.apply(fix[0], fix[1], oldK) }
-                    }
-                }
-
-                // Op 8: targeted rangeHigh fix — direct-eval
-                8 -> {
-                    val fix = findRangeHighFix(p, eval, rng)
+                // Ops 3-8: targeted single-cell fix with shuffled fallback — direct-eval
+                in 3..8 -> {
+                    val fix = findTargetedFix(p, eval, rng)
                     if (fix != null) {
                         val oldK = eval.at(fix[0], fix[1])
                         eval.apply(fix[0], fix[1], fix[2])

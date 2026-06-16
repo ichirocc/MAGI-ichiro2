@@ -601,12 +601,13 @@ object V6NativeOptimizer {
                 // --- Copy-based multi-cell operators ---
                 else -> {
                     val cand = cur.copy2D()
-                    when (rng.nextInt(5)) {
+                    when (rng.nextInt(6)) {
                         0 -> destroyRepairViolations(state, cand, bestReport, rng)
                         1 -> destroyRepairDay(state, cand, rng)
                         2 -> polishCovO(p, cand, eval, rng)
                         3 -> polishC2(p, cand, eval, rng)
-                        else -> polishRangeLow(p, cand, eval, rng)
+                        4 -> polishRangeLow(p, cand, eval, rng)
+                        else -> polishC3Want(p, cand, eval, rng)
                     }
                     // Skip hf67 when hard-feasible: DeltaEvaluator rejects any hard regression.
                     val fixed = if (curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand
@@ -706,6 +707,45 @@ object V6NativeOptimizer {
         for (j in 0 until p.T) if (eval.at(i, j) != k && p.wish[i][j] < 0) days.add(j)
         if (days.isEmpty()) return
         schedule[i][days[rng.nextInt(days.size)]] = k
+    }
+
+    /**
+     * Targeted C3 wanted-sequence polish: pick a random C3/C3m pattern, scan for a window where
+     * exactly one shift is missing (D-1 of D match), and fill the gap.  Directly attacks c3/c3m
+     * soft violations one completion at a time.
+     */
+    private fun polishC3Want(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
+        val list = when {
+            p.cons3.isNotEmpty() && p.cons3m.isNotEmpty() -> if (rng.nextBoolean()) p.cons3 else p.cons3m
+            p.cons3.isNotEmpty() -> p.cons3
+            p.cons3m.isNotEmpty() -> p.cons3m
+            else -> return
+        }
+        val c = list[rng.nextInt(list.size)]
+        val seq = c.seq; val D = seq.size
+        if (D < 2 || D > p.T) return
+        // Scan all staff rows; return as soon as the first fixable near-match is found.
+        val iStart = rng.nextInt(p.S)
+        for (di in 0 until p.S) {
+            val i = (iStart + di) % p.S
+            var j = 0
+            while (j <= p.T - D) {
+                if (eval.at(i, j) == seq[0]) {
+                    var miss = 0; var missL = -1
+                    for (l in 1 until D) {
+                        if (eval.at(i, j + l) != seq[l]) { miss++; if (miss > 1) break else missL = l }
+                    }
+                    if (miss == 1 && missL >= 0) {
+                        val ml = j + missL
+                        if (p.wish[i][ml] < 0 && p.canDo(i, seq[missL])) {
+                            schedule[i][ml] = seq[missL]
+                            return
+                        }
+                    }
+                }
+                j++
+            }
+        }
     }
 
     private fun bestStaffForCoverage(p: Problem, schedule: Array<IntArray>, counts: Array<IntArray>, j: Int, k: Int): Int {

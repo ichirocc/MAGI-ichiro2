@@ -238,7 +238,7 @@ object V6NativeOptimizer {
                 // ── Direct-eval path (ops 3/4 when hard-feasible): no copy2D, no diffInto ──
                 // Applies the move straight to eval+cur; reverts on rejection.
                 // Invariant: eval.at(i,j) == cur[i][j] for all cells at all times.
-                if (curHard == 0L && (op == 3 || op == 4)) {
+                if (curHard == 0L && (op == 3 || op == 4 || op == 5)) {
                     var moved = false
                     if (op == 3 && p.S > 0 && p.T >= 2) {          // swapWithinStaff
                         val i = rng.nextInt(p.S)
@@ -273,6 +273,19 @@ object V6NativeOptimizer {
                                 } else { eval.apply(i, j, oldK) }
                             }
                         }
+                    } else if (op == 5) {                            // targeted single-cell repair (direct-eval)
+                        val fix = findTargetedFix(p, eval, rng)
+                        if (fix != null) {
+                            val oldK = eval.at(fix[0], fix[1])
+                            eval.apply(fix[0], fix[1], fix[2]); moved = true
+                            val ns = eval.score()
+                            val ig = betterScore(ns, globalScore); val ic = betterScore(ns, curScore)
+                            if (ic || acceptWorseScore(ns, curScore, temp, rng)) {
+                                cur[fix[0]][fix[1]] = fix[2]; curScore = ns
+                                if (ig) { globalBest = cur.copy2D(); globalScore = ns; globalReport = UnifiedViolationChecker.check(state, cur) }
+                                reward = if (ig) 4.0 else if (ic) 2.0 else 1.0
+                            } else { eval.apply(fix[0], fix[1], oldK) }
+                        }
                     }
                     if (moved) { opScore[op] += reward; opCnt[op]++ }
                 } else {
@@ -284,13 +297,7 @@ object V6NativeOptimizer {
                         2 -> destroyRepairViolations(state, cand, curReport, rng)
                         3 -> swapWithinStaff(state, cand, rng)
                         4 -> randomAllowedCell(state, cand, rng)
-                        else -> when (rng.nextInt(5)) {   // op 5: targeted single-cell repair
-                            0 -> polishCovO(p, cand, eval, rng)
-                            1 -> polishC2(p, cand, eval, rng)
-                            2 -> polishRangeLow(p, cand, eval, rng)
-                            3 -> polishC41(p, cand, eval, rng)
-                            else -> polishRangeHigh(p, cand, eval, rng)
-                        }
+                        else -> randomAllowedCell(state, cand, rng)  // op 5 handled in direct-eval path
                     }
                     // hf67 only needed while hard violations are active.
                     val fixed = if (iter % 7L == 0L && curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand
@@ -643,15 +650,13 @@ object V6NativeOptimizer {
         return PolishResult(best, logs, iters)
     }
 
-    /**
-     * Targeted covO polish: find an over-covered (shift, day) using the DeltaEvaluator's per-day
-     * counts, then move one free staff member to a deficit shift on the same day (or a random
-     * allowed shift if no deficit exists).  O(S × K) per call — far cheaper than a full check().
-     */
-    private fun polishCovO(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
-        if (p.T == 0 || p.K == 0) return
+    // ── findXxx: return [i, j, newK] for a targeted single-cell fix, or null if none found.
+    // These are the canonical implementations; polishXxx wrappers apply to a schedule copy,
+    // and the ALNS direct-eval path applies directly to eval+cur without any copy2D.
+
+    private fun findCovOFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
+        if (p.T == 0 || p.K == 0) return null
         val j = rng.nextInt(p.T)
-        // Find the most over-covered shift on this day.
         var overK = -1; var maxOver = 0
         for (k in 0 until p.K) {
             val lo = p.need1[k][j]; if (lo < 0) continue
@@ -659,13 +664,11 @@ object V6NativeOptimizer {
             val over = eval.countOnDay(k, j) - hi
             if (over > maxOver) { maxOver = over; overK = k }
         }
-        if (overK < 0) return
-        // Pick a staff member who can be moved (no wish lock on this day).
+        if (overK < 0) return null
         val workers = ArrayList<Int>(p.S)
-        for (i in 0 until p.S) if (schedule[i][j] == overK && p.wish[i][j] < 0) workers.add(i)
-        if (workers.isEmpty()) return
+        for (i in 0 until p.S) if (eval.at(i, j) == overK && p.wish[i][j] < 0) workers.add(i)
+        if (workers.isEmpty()) return null
         val i = workers[rng.nextInt(workers.size)]
-        // Prefer a deficit shift; fall back to any other allowed shift.
         var bestNw = -1; var bestDef = Int.MIN_VALUE
         for (k in 0 until p.K) {
             if (k == overK || !p.canDo(i, k)) continue
@@ -673,15 +676,11 @@ object V6NativeOptimizer {
             val def = if (lo >= 0) lo - eval.countOnDay(k, j) else 0
             if (def > bestDef) { bestDef = def; bestNw = k }
         }
-        if (bestNw >= 0) schedule[i][j] = bestNw
+        return if (bestNw >= 0) intArrayOf(i, j, bestNw) else null
     }
 
-    /**
-     * Targeted c2 polish: pick a C2 constraint where a random staff member is below the required
-     * shift count, then assign the needed shift on one free (non-wish-locked) day.
-     */
-    private fun polishC2(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
-        if (p.cons2.isEmpty()) return
+    private fun findC2Fix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
+        if (p.cons2.isEmpty()) return null
         val c = p.cons2[rng.nextInt(p.cons2.size)]
         val defStaff = ArrayList<Int>(p.S)
         for (i in 0 until p.S) {
@@ -689,34 +688,88 @@ object V6NativeOptimizer {
             var cnt = 0; for (j in 0 until p.T) if (eval.at(i, j) == c.shiftIdx) cnt++
             if (cnt < c.count) defStaff.add(i)
         }
-        if (defStaff.isEmpty()) return
+        if (defStaff.isEmpty()) return null
         val i = defStaff[rng.nextInt(defStaff.size)]
         val days = ArrayList<Int>(p.T)
         for (j in 0 until p.T) if (eval.at(i, j) != c.shiftIdx && p.wish[i][j] < 0) days.add(j)
-        if (days.isEmpty()) return
-        schedule[i][days[rng.nextInt(days.size)]] = c.shiftIdx
+        if (days.isEmpty()) return null
+        return intArrayOf(i, days[rng.nextInt(days.size)], c.shiftIdx)
     }
 
-    /**
-     * Targeted rangeLo polish: pick a (staff, shift) pair where the count is below rangeLo, then
-     * assign that shift on one free day.
-     */
-    private fun polishRangeLow(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
-        val cands = ArrayList<Long>(p.S * p.K)   // packed i*K+k
+    private fun findRangeLowFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
+        val cands = ArrayList<Long>(p.S * p.K)
         for (i in 0 until p.S) for (k in 0 until p.K) {
             val lo = p.rangeLo[i][k]
             if (lo == Int.MIN_VALUE || !p.canDo(i, k)) continue
             var cnt = 0; for (j in 0 until p.T) if (eval.at(i, j) == k) cnt++
             if (cnt < lo) cands.add(i.toLong() * p.K + k)
         }
-        if (cands.isEmpty()) return
+        if (cands.isEmpty()) return null
         val packed = cands[rng.nextInt(cands.size)]
         val i = (packed / p.K).toInt(); val k = (packed % p.K).toInt()
         val days = ArrayList<Int>(p.T)
         for (j in 0 until p.T) if (eval.at(i, j) != k && p.wish[i][j] < 0) days.add(j)
-        if (days.isEmpty()) return
-        schedule[i][days[rng.nextInt(days.size)]] = k
+        if (days.isEmpty()) return null
+        return intArrayOf(i, days[rng.nextInt(days.size)], k)
     }
+
+    private fun findC41Fix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
+        if (p.cons41.isEmpty() || p.T == 0) return null
+        val c = p.cons41[rng.nextInt(p.cons41.size)]
+        val j = rng.nextInt(p.T)
+        var cnt = 0
+        for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) == c.shiftIdx) cnt++
+        return when {
+            cnt > c.u -> {
+                val workers = ArrayList<Int>(p.S)
+                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) == c.shiftIdx && p.wish[i][j] < 0) workers.add(i)
+                if (workers.isEmpty()) return null
+                val i = workers[rng.nextInt(workers.size)]
+                val other = p.allowedShiftsForStaff(i).filter { it != c.shiftIdx }
+                if (other.isEmpty()) null else intArrayOf(i, j, other[rng.nextInt(other.size)])
+            }
+            cnt < c.l -> {
+                val avail = ArrayList<Int>(p.S)
+                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) != c.shiftIdx && p.wish[i][j] < 0 && p.canDo(i, c.shiftIdx)) avail.add(i)
+                if (avail.isEmpty()) null else intArrayOf(avail[rng.nextInt(avail.size)], j, c.shiftIdx)
+            }
+            else -> null
+        }
+    }
+
+    private fun findRangeHighFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
+        val cands = ArrayList<Long>(p.S * p.K)
+        for (i in 0 until p.S) for (k in 0 until p.K) {
+            val hi = p.rangeHi[i][k]; if (hi == Int.MAX_VALUE) continue
+            var cnt = 0; for (j in 0 until p.T) if (eval.at(i, j) == k) cnt++
+            if (cnt > hi) cands.add(i.toLong() * p.K + k)
+        }
+        if (cands.isEmpty()) return null
+        val packed = cands[rng.nextInt(cands.size)]
+        val i = (packed / p.K).toInt(); val k = (packed % p.K).toInt()
+        val days = ArrayList<Int>(p.T)
+        for (j in 0 until p.T) if (eval.at(i, j) == k && p.wish[i][j] < 0) days.add(j)
+        if (days.isEmpty()) return null
+        val j = days[rng.nextInt(days.size)]
+        val other = p.allowedShiftsForStaff(i).filter { it != k }
+        return if (other.isNotEmpty()) intArrayOf(i, j, other[rng.nextInt(other.size)]) else null
+    }
+
+    /** Pick one of the 5 targeted fix types at random and return the target cell, or null. */
+    private fun findTargetedFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? = when (rng.nextInt(5)) {
+        0 -> findCovOFix(p, eval, rng)
+        1 -> findC2Fix(p, eval, rng)
+        2 -> findRangeLowFix(p, eval, rng)
+        3 -> findC41Fix(p, eval, rng)
+        else -> findRangeHighFix(p, eval, rng)
+    }
+
+    // Wrappers that apply a found fix to a schedule copy (used by hf80PostPolish copy-based tier).
+    private fun polishCovO(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findCovOFix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
+    private fun polishC2(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findC2Fix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
+    private fun polishRangeLow(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findRangeLowFix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
+    private fun polishC41(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findC41Fix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
+    private fun polishRangeHigh(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findRangeHighFix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
 
     /**
      * Targeted C3 wanted-sequence polish: pick a random C3/C3m pattern, scan for a window where
@@ -755,57 +808,6 @@ object V6NativeOptimizer {
                 j++
             }
         }
-    }
-
-    /**
-     * Targeted C41 polish: pick a random C41 constraint, pick a random day that violates it,
-     * then either add or remove one staff member from the group on that shift to push the count
-     * back toward [l, u].
-     */
-    private fun polishC41(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
-        if (p.cons41.isEmpty() || p.T == 0) return
-        val c = p.cons41[rng.nextInt(p.cons41.size)]
-        val j = rng.nextInt(p.T)
-        var cnt = 0
-        for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) == c.shiftIdx) cnt++
-        when {
-            cnt > c.u -> {
-                val workers = ArrayList<Int>(p.S)
-                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) == c.shiftIdx && p.wish[i][j] < 0) workers.add(i)
-                if (workers.isEmpty()) return
-                val i = workers[rng.nextInt(workers.size)]
-                val other = p.allowedShiftsForStaff(i).filter { it != c.shiftIdx }
-                if (other.isNotEmpty()) schedule[i][j] = other[rng.nextInt(other.size)]
-            }
-            cnt < c.l -> {
-                val avail = ArrayList<Int>(p.S)
-                for (i in 0 until p.S) if (p.sgrp[i] == c.groupIdx && eval.at(i, j) != c.shiftIdx && p.wish[i][j] < 0 && p.canDo(i, c.shiftIdx)) avail.add(i)
-                if (avail.isEmpty()) return
-                schedule[avail[rng.nextInt(avail.size)]][j] = c.shiftIdx
-            }
-        }
-    }
-
-    /**
-     * Targeted rangeHi polish: pick a (staff, shift) pair above rangeHi, then move one occurrence
-     * on a free day to another allowed shift, directly reducing 'high' violations.
-     */
-    private fun polishRangeHigh(p: Problem, schedule: Array<IntArray>, eval: DeltaEvaluator, rng: Random) {
-        val cands = ArrayList<Long>(p.S * p.K)
-        for (i in 0 until p.S) for (k in 0 until p.K) {
-            val hi = p.rangeHi[i][k]; if (hi == Int.MAX_VALUE) continue
-            var cnt = 0; for (j in 0 until p.T) if (eval.at(i, j) == k) cnt++
-            if (cnt > hi) cands.add(i.toLong() * p.K + k)
-        }
-        if (cands.isEmpty()) return
-        val packed = cands[rng.nextInt(cands.size)]
-        val i = (packed / p.K).toInt(); val k = (packed % p.K).toInt()
-        val days = ArrayList<Int>(p.T)
-        for (j in 0 until p.T) if (eval.at(i, j) == k && p.wish[i][j] < 0) days.add(j)
-        if (days.isEmpty()) return
-        val j = days[rng.nextInt(days.size)]
-        val other = p.allowedShiftsForStaff(i).filter { it != k }
-        if (other.isNotEmpty()) schedule[i][j] = other[rng.nextInt(other.size)]
     }
 
     private fun bestStaffForCoverage(p: Problem, schedule: Array<IntArray>, counts: Array<IntArray>, j: Int, k: Int): Int {

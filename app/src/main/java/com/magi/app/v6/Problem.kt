@@ -14,6 +14,23 @@ class C42(@JvmField val g1: Int, @JvmField val s1: Int, @JvmField val g2: Int, @
  * Faithfully mirrors the Web worker's prelude + resolveConstraints().
  */
 class Problem(val state: MagiState) {
+    companion object {
+        @Volatile private var cached: Problem? = null
+
+        /**
+         * Identity-cached factory. [Problem] is immutable and a pure function of [state]
+         * (it re-parses needs/constraints on construction), so the optimizer's many
+         * per-iteration evaluations of the same state object reuse one instance instead of
+         * rebuilding it every call. The single shared instance is safe across SA workers
+         * because nothing mutates Problem after construction.
+         */
+        fun of(state: MagiState): Problem {
+            val c = cached
+            if (c != null && c.state === state) return c
+            return Problem(state).also { cached = it }
+        }
+    }
+
     val S = state.staffCount
     val T = state.dayCount
     val K = state.shiftCount

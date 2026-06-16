@@ -13,15 +13,15 @@ import java.util.Random
  *
  * Uses a hand-built MagiState (no JSON / no Android deps) chosen to exercise every
  * constraint family: c1 window, c2 per-staff total, c3/c3n/c3m/c3mn sequences,
- * c41 group-day range, c42 group pair, covU with use2Patterns (MIN=OR), staff ranges,
- * and wishes.
+ * c41 group-day range, c42 group pair, covU/covO coverage band with use2Patterns
+ * (need1 lower bound, need2 upper bound), staff ranges, and wishes.
  */
 class DeltaEvaluatorTest {
 
     private fun shift(name: String, kigou: String, n1: String, n2: String) = Shift(name, kigou, n1, n2)
 
     private fun buildState(): MagiState {
-        // shifts: 0=休(no need), A,B,C have per-day needs (P1/P2 differ -> exercises MIN=OR)
+        // shifts: 0=休(no need), A,B,C have per-day needs (need1/need2 differ -> exercises covO)
         val shifts = listOf(
             shift("休", "休", "", ""),
             shift("A", "A", "1", "2"),

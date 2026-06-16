@@ -3,7 +3,11 @@
 /app/build/
 .gradle/
 
+# Local SDK path (machine-specific, not for version control)
+local.properties
+
 # Generated design-preview / report artifacts (regenerate with the tools/ scripts)
 tools/*.png
 tools/*.pdf
 tools/*.xlsx
+local.properties

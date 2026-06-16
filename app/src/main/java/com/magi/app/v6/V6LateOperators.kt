@@ -61,7 +61,7 @@ object V6LateOperators {
         rectTry: Int = 12,
         blkTry: Int = 8,
     ): LateImproveResult {
-        val p = Problem(state)
+        val p = Problem.of(state)
         val sched = schedule.copy2D()
         val logs = ArrayList<MirrorLog>()
         var cur = report

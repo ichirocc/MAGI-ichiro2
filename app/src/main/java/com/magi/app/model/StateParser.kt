@@ -10,6 +10,9 @@ import org.json.JSONObject
  */
 object StateParser {
 
+    /** 最適化後 schedule と食い違う古い派生・キャッシュ系フィールド（互換性事故防止のため出力時に除去）。 */
+    private val STALE_DERIVED_KEYS = listOf("violations", "needViolations", "countViolations", "lastResult", "lastPhase")
+
     fun parse(json: String): MagiState {
         val o = JSONObject(json)
 
@@ -96,10 +99,7 @@ object StateParser {
      */
     fun exportWithSchedule(originalJson: String, newSchedule: Array<IntArray>): String {
         val o = JSONObject(originalJson)
-        // 最適化後 schedule と食い違う古い派生・キャッシュ系フィールドを除去（互換性事故防止）。
-        for (k in listOf("violations", "needViolations", "countViolations", "lastResult", "lastPhase")) {
-            o.remove(k)
-        }
+        for (k in STALE_DERIVED_KEYS) o.remove(k)
         val arr = JSONArray()
         for (row in newSchedule) {
             val r = JSONArray()
@@ -117,7 +117,7 @@ object StateParser {
      */
     fun exportWithEdits(originalJson: String, state: MagiState, newSchedule: Array<IntArray>): String {
         val o = JSONObject(originalJson)
-        for (k in listOf("violations", "needViolations", "countViolations", "lastResult", "lastPhase")) o.remove(k)
+        for (k in STALE_DERIVED_KEYS) o.remove(k)
         val sched = JSONArray()
         for (row in newSchedule) { val r = JSONArray(); for (v in row) r.put(v); sched.put(r) }
         o.put("schedule", sched)
@@ -182,7 +182,7 @@ object StateParser {
         o.put("cons3mn", consArr(state.cons3mn) { patternObj(it.pattern) })
         o.put("cons41", consArr(state.cons41) { obj("groupKigou" to it.groupKigou, "shiftKigou" to it.shiftKigou, "l" to it.l, "u" to it.u) })
         o.put("cons42", consArr(state.cons42) { obj("g1Kigou" to it.g1Kigou, "g2Kigou" to it.g2Kigou, "s1Kigou" to it.s1Kigou, "s2Kigou" to it.s2Kigou) })
-        for ((k, v) in state.extras) if (!o.has(k)) o.put(k, v)
+        for ((k, v) in state.extras) if (k !in STALE_DERIVED_KEYS && !o.has(k)) o.put(k, v)
         return o.toString(2)
     }
 

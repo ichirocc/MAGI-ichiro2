@@ -1,0 +1,9 @@
+# Build
+/build/
+/app/build/
+.gradle/
+
+# Generated design-preview / report artifacts (regenerate with the tools/ scripts)
+tools/*.png
+tools/*.pdf
+tools/*.xlsx

@@ -832,20 +832,14 @@ object V6NativeOptimizer {
     }
 
     /** Pick one of the 5 targeted fix types at random and return the target cell, or null. */
-    private fun findTargetedFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? = when (rng.nextInt(5)) {
+    private fun findTargetedFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? = when (rng.nextInt(6)) {
         0 -> findCovOFix(p, eval, rng)
         1 -> findC2Fix(p, eval, rng)
         2 -> findRangeLowFix(p, eval, rng)
         3 -> findC41Fix(p, eval, rng)
-        else -> findRangeHighFix(p, eval, rng)
+        4 -> findRangeHighFix(p, eval, rng)
+        else -> findC3WantFix(p, eval, rng)
     }
-
-    // Wrappers that apply a found fix to a schedule copy (used by hf80PostPolish copy-based tier).
-    private fun polishCovO(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findCovOFix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
-    private fun polishC2(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findC2Fix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
-    private fun polishRangeLow(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findRangeLowFix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
-    private fun polishC41(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findC41Fix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
-    private fun polishRangeHigh(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findRangeHighFix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
 
     /**
      * Targeted C3/C3m wanted-sequence polish: scan for a window that is one shift away from
@@ -881,7 +875,6 @@ object V6NativeOptimizer {
         }
         return null
     }
-    private fun polishC3Want(p: Problem, s: Array<IntArray>, e: DeltaEvaluator, r: Random) { val f = findC3WantFix(p, e, r) ?: return; s[f[0]][f[1]] = f[2] }
 
     private fun bestStaffForCoverage(p: Problem, schedule: Array<IntArray>, counts: Array<IntArray>, j: Int, k: Int): Int {
         var bestI = -1

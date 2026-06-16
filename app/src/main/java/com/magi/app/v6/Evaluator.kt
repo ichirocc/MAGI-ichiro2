@@ -4,10 +4,11 @@ package com.magi.app.v6
  * Faithful port of the Web worker's `fullEval`.
  *
  * Lexicographic objective:  score = (hard1 + hard2) * 1_000_000 + soft
- *   hard1 = c3n (forbidden seq) + covU (per-day need shortfall, MIN=OR over P1/P2) + pref
+ *   hard1 = c3n (forbidden seq) + covU (per-day shortfall below need1) + pref
  *   hard2 = ct  (LimMin / LimMax range violations)
  *   soft  = c1 (window) + c2 (per-staff total) + c41 (group/day range)
  *           + c42 (group pair conflict) + c3 (want seq) + c3m + c3mn
+ *           + covO (per-day excess above the need2 upper bound)
  *
  * The solution `a[i][j]` is the assigned shift index (exactly one shift per cell),
  * the equivalent of the Web's one-hot `x[i][j][k] === 1`.
@@ -92,27 +93,24 @@ class Evaluator(private val p: Problem, private val c3RunMode: Boolean = true) {
             else if (hasLo && hasHi) { if (n < lo || n > hi) hard2 += 1 }
         }
 
-        // covU: per-day need shortfall. MIN=OR two-generation design (P1 vs P2).
-        var c2v1 = 0L; var c2v2 = 0L
+        // coverage band [need1, need2]: covU = shortfall below need1 (display HARD),
+        // covO = excess above the upper bound (display SOFT). need2 is the upper bound
+        // when use2 is on and set, otherwise need1 doubles as the upper bound. Matches
+        // UnifiedViolationChecker so the optimizer minimizes exactly what is reported.
         for (j in 0 until T) {
             for (k in 0 until K) {
-                val n = p.need1[k][j]
-                if (n >= 0) {
-                    var dsn = 0
-                    for (i in 0 until S) if (a[i][j] == k) dsn++
-                    if (dsn < n) c2v1 += (n - dsn)
-                }
-                if (p.use2) {
-                    val n2 = p.need2[k][j]
-                    if (n2 >= 0) {
-                        var dsn2 = 0
-                        for (i in 0 until S) if (a[i][j] == k) dsn2++
-                        if (dsn2 < n2) c2v2 += (n2 - dsn2)
-                    }
+                val lo = p.need1[k][j]
+                if (lo < 0) continue
+                var got = 0
+                for (i in 0 until S) if (a[i][j] == k) got++
+                if (got < lo) {
+                    hard1 += (lo - got)
+                } else {
+                    val hi = if (p.use2 && p.need2[k][j] >= 0) p.need2[k][j] else lo
+                    if (got > hi) soft += (got - hi)
                 }
             }
         }
-        hard1 += if (p.use2) minOf(c2v1, if (c2v2 != 0L) c2v2 else c2v1) else c2v1
 
         return (hard1 + hard2) * 1_000_000L + soft
     }

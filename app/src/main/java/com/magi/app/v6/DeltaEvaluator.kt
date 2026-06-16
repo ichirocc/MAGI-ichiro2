@@ -27,13 +27,13 @@ class DeltaEvaluator(private val p: Problem, private val c3RunMode: Boolean = tr
     private var sc1 = 0L; private var sc2 = 0L; private var sc41 = 0L; private var sc42 = 0L
     private var sc3 = 0L; private var hc3n = 0L; private var sc3m = 0L; private var sc3mn = 0L
     private var hpref = 0L; private var hct = 0L
-    private var covP1 = 0L; private var covP2 = 0L
+    private var covU = 0L; private var covO = 0L   // need1 shortfall (hard) / need2 over-cover (soft)
 
     // stashed deltas from the last preview (applied by commit())
     private var lI = -1; private var lJ = -1; private var lOld = -1; private var lNw = -1
     private var dC1 = 0L; private var dC2 = 0L; private var dC41 = 0L; private var dC42 = 0L
     private var dC3 = 0L; private var dC3n = 0L; private var dC3m = 0L; private var dC3mn = 0L
-    private var dPref = 0L; private var dCt = 0L; private var nCovP1 = 0L; private var nCovP2 = 0L
+    private var dPref = 0L; private var dCt = 0L; private var nCovU = 0L; private var nCovO = 0L
 
     init {
         a = p.initialAssignment()
@@ -58,13 +58,12 @@ class DeltaEvaluator(private val p: Problem, private val c3RunMode: Boolean = tr
         return score()
     }
 
-    fun score(): Long = scoreFrom(covP1, covP2)
+    fun score(): Long = scoreFrom(covU, covO)
 
-    private fun scoreFrom(p1: Long, p2: Long): Long {
-        val cov = if (p.use2) minOf(p1, if (p2 != 0L) p2 else p1) else p1
-        val h1 = hc3n + cov + hpref
+    private fun scoreFrom(cu: Long, co: Long): Long {
+        val h1 = hc3n + cu + hpref
         val h2 = hct
-        val soft = sc1 + sc2 + sc41 + sc42 + sc3 + sc3m + sc3mn
+        val soft = sc1 + sc2 + sc41 + sc42 + sc3 + sc3m + sc3mn + co
         return (h1 + h2) * 1_000_000L + soft
     }
 
@@ -74,7 +73,7 @@ class DeltaEvaluator(private val p: Problem, private val c3RunMode: Boolean = tr
         lI = i; lJ = j; lOld = old; lNw = nw
         if (nw == old) {
             dC1 = 0; dC2 = 0; dC41 = 0; dC42 = 0; dC3 = 0; dC3n = 0; dC3m = 0; dC3mn = 0
-            dPref = 0; dCt = 0; nCovP1 = covP1; nCovP2 = covP2
+            dPref = 0; dCt = 0; nCovU = covU; nCovO = covO
             return score()
         }
 
@@ -133,18 +132,19 @@ class DeltaEvaluator(private val p: Problem, private val c3RunMode: Boolean = tr
         }
         dC42 = d42
 
-        // covU: update P1/P2 totals for the two affected (shift,day) cells
-        var p1 = covP1; var p2 = covP2
+        // coverage: update covU (need1 shortfall, hard) and covO (need2 over-cover, soft)
+        // for the two affected (shift,day) cells.
+        var cu = covU; var coo = covO
         val co = cntDay[old][j]
-        if (p.need1[old][j] >= 0) p1 += short0(p.need1[old][j], co - 1) - short0(p.need1[old][j], co)
-        if (p.use2 && p.need2[old][j] >= 0) p2 += short0(p.need2[old][j], co - 1) - short0(p.need2[old][j], co)
+        cu += covUCell(old, j, co - 1) - covUCell(old, j, co)
+        coo += covOCell(old, j, co - 1) - covOCell(old, j, co)
         val cn = cntDay[nw][j]
-        if (p.need1[nw][j] >= 0) p1 += short0(p.need1[nw][j], cn + 1) - short0(p.need1[nw][j], cn)
-        if (p.use2 && p.need2[nw][j] >= 0) p2 += short0(p.need2[nw][j], cn + 1) - short0(p.need2[nw][j], cn)
-        nCovP1 = p1; nCovP2 = p2
+        cu += covUCell(nw, j, cn + 1) - covUCell(nw, j, cn)
+        coo += covOCell(nw, j, cn + 1) - covOCell(nw, j, cn)
+        nCovU = cu; nCovO = coo
 
-        val dHard = dC3n + (covUOf(p1, p2) - covUOf(covP1, covP2)) + dPref + dCt
-        val dSoft = dC1 + dC2 + dC41 + dC42 + dC3 + dC3m + dC3mn
+        val dHard = dC3n + (cu - covU) + dPref + dCt
+        val dSoft = dC1 + dC2 + dC41 + dC42 + dC3 + dC3m + dC3mn + (coo - covO)
         return score() + dHard * 1_000_000L + dSoft
     }
 
@@ -161,7 +161,7 @@ class DeltaEvaluator(private val p: Problem, private val c3RunMode: Boolean = tr
             sc1 += dC1; sc2 += dC2; sc41 += dC41; sc42 += dC42
             sc3 += dC3; hc3n += dC3n; sc3m += dC3m; sc3mn += dC3mn
             hpref += dPref; hct += dCt
-            covP1 = nCovP1; covP2 = nCovP2
+            covU = nCovU; covO = nCovO
         } finally {
             // invalidate the stash so a stray double-commit cannot corrupt aggregates
             lI = -1; lJ = -1; lOld = -1; lNw = -1
@@ -179,15 +179,27 @@ class DeltaEvaluator(private val p: Problem, private val c3RunMode: Boolean = tr
         sc3 = c3All(p.cons3, false); hc3n = c3All(p.cons3n, true)
         sc3m = c3All(p.cons3m, false); sc3mn = c3All(p.cons3mn, true)
         hpref = prefAll(); hct = ctAll()
-        val cov = covAll(); covP1 = cov[0]; covP2 = cov[1]
+        val cov = covAll(); covU = cov[0]; covO = cov[1]
     }
 
     // ---- helpers ---------------------------------------------------------------
 
     private fun viol01(b: Boolean): Long = if (b) 1L else 0L
-    private fun short0(need: Int, have: Int): Long = if (have < need) (need - have).toLong() else 0L
-    private fun covUOf(p1: Long, p2: Long): Long =
-        if (p.use2) minOf(p1, if (p2 != 0L) p2 else p1) else p1
+
+    /** Per-cell coverage shortfall below need1 (display HARD). */
+    private fun covUCell(k: Int, j: Int, have: Int): Long {
+        val lo = p.need1[k][j]
+        return if (lo >= 0 && have < lo) (lo - have).toLong() else 0L
+    }
+
+    /** Per-cell coverage excess above the upper bound (display SOFT); gated on need1 set,
+     *  upper bound = need2 when use2 is on and set, otherwise need1. Matches UnifiedViolationChecker. */
+    private fun covOCell(k: Int, j: Int, have: Int): Long {
+        val lo = p.need1[k][j]
+        if (lo < 0) return 0L
+        val hi = if (p.use2 && p.need2[k][j] >= 0) p.need2[k][j] else lo
+        return if (have > hi) (have - hi).toLong() else 0L
+    }
 
     private fun rangeViol(i: Int, k: Int, n: Int): Long {
         val lo = p.rangeLo[i][k]; val hi = p.rangeHi[i][k]
@@ -326,12 +338,12 @@ class DeltaEvaluator(private val p: Problem, private val c3RunMode: Boolean = tr
     }
 
     private fun covAll(): LongArray {
-        var p1 = 0L; var p2 = 0L
+        var u = 0L; var o = 0L
         for (j in 0 until T) for (k in 0 until K) {
-            val n = p.need1[k][j]; val have = cntDay[k][j]
-            if (n >= 0 && have < n) p1 += (n - have)
-            if (p.use2) { val n2 = p.need2[k][j]; if (n2 >= 0 && have < n2) p2 += (n2 - have) }
+            val have = cntDay[k][j]
+            u += covUCell(k, j, have)
+            o += covOCell(k, j, have)
         }
-        return longArrayOf(p1, p2)
+        return longArrayOf(u, o)
     }
 }

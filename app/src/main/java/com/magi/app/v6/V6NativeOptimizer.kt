@@ -308,23 +308,32 @@ object V6NativeOptimizer {
                 } else {
                     // ── Copy-based path (multi-cell ops 0/1/2 only) ──
                     val cand = cur.copy2D()
-                    // For destroyRepairDay, pick j here so we can do an O(S) column diff
-                    // instead of the full O(S*T) diffInto scan when hf67 is not triggered.
-                    val drDay = if (op == 0 && p.T > 0) rng.nextInt(p.T) else -1
+                    // Pick i/j before calling single-axis operators so we can do targeted
+                    // diffs (O(S) column or O(T) row) instead of the full O(S*T) diffInto.
+                    val drDay   = if (op == 0 && p.T > 0) rng.nextInt(p.T) else -1
+                    val drStaff = if (op == 1 && p.S > 0) rng.nextInt(p.S) else -1
                     when (op) {
                         0 -> destroyRepairDayAt(state, cand, drDay, rng)
-                        1 -> destroyRepairStaff(state, cand, rng)
+                        1 -> destroyRepairStaffAt(state, cand, drStaff, rng)
                         else -> destroyRepairViolations(state, cand, curReport, rng)
                     }
                     // hf67 only needed while hard violations are active.
                     val fixed = if (iter % 7L == 0L && curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand
-                    val nDiffs = if (op == 0 && drDay >= 0 && fixed === cand) {
-                        // Column-only diff: only day drDay can have changed.
-                        var n = 0
-                        for (i in 0 until p.S) { if (cur[i][drDay] != fixed[i][drDay]) diffBuf[n++] = i * p.T + drDay }
-                        n
-                    } else {
-                        diffInto(p.T, cur, fixed, diffBuf)
+                    val nDiffs = when {
+                        op == 0 && drDay >= 0 && fixed === cand -> {
+                            // Only column drDay can have changed.
+                            var n = 0
+                            for (i in 0 until p.S) { if (cur[i][drDay] != fixed[i][drDay]) diffBuf[n++] = i * p.T + drDay }
+                            n
+                        }
+                        op == 1 && drStaff >= 0 && fixed === cand -> {
+                            // Only row drStaff can have changed.
+                            var n = 0
+                            val row = fixed[drStaff]; val curRow = cur[drStaff]
+                            for (j in 0 until p.T) { if (curRow[j] != row[j]) diffBuf[n++] = drStaff * p.T + j }
+                            n
+                        }
+                        else -> diffInto(p.T, cur, fixed, diffBuf)
                     }
                     for (idx in 0 until nDiffs) {
                         val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, fixed[flat / p.T][flat % p.T])
@@ -895,7 +904,11 @@ object V6NativeOptimizer {
     private fun destroyRepairStaff(state: MagiState, schedule: Array<IntArray>, rng: Random) {
         val p = Problem.of(state)
         if (p.S == 0) return
-        val i = rng.nextInt(p.S)
+        destroyRepairStaffAt(state, schedule, rng.nextInt(p.S), rng)
+    }
+
+    private fun destroyRepairStaffAt(state: MagiState, schedule: Array<IntArray>, i: Int, rng: Random) {
+        val p = Problem.of(state)
         val allowed = p.allowedShiftsForStaff(i)
         if (allowed.isEmpty()) return
         repeat(min(p.T, 3 + rng.nextInt(8))) {

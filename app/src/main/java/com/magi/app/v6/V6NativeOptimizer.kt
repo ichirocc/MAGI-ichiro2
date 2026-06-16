@@ -235,10 +235,10 @@ object V6NativeOptimizer {
                 val curHard = curScore / 1_000_000L
                 var reward = 0.2   // default: rejected
 
-                // ── Direct-eval path (ops 3/4 when hard-feasible): no copy2D, no diffInto ──
+                // ── Direct-eval path (ops 3/4/5): no copy2D, no diffInto ──
                 // Applies the move straight to eval+cur; reverts on rejection.
                 // Invariant: eval.at(i,j) == cur[i][j] for all cells at all times.
-                if (curHard == 0L && (op == 3 || op == 4 || op == 5)) {
+                if (op == 3 || op == 4 || op == 5) {
                     var moved = false
                     if (op == 3 && p.S > 0 && p.T >= 2) {          // swapWithinStaff
                         val i = rng.nextInt(p.S)
@@ -289,15 +289,12 @@ object V6NativeOptimizer {
                     }
                     if (moved) { opScore[op] += reward; opCnt[op]++ }
                 } else {
-                    // ── Copy-based path (multi-cell ops, or any op when still hard-infeasible) ──
+                    // ── Copy-based path (multi-cell ops 0/1/2 only) ──
                     val cand = cur.copy2D()
                     when (op) {
                         0 -> destroyRepairDay(state, cand, rng)
                         1 -> destroyRepairStaff(state, cand, rng)
-                        2 -> destroyRepairViolations(state, cand, curReport, rng)
-                        3 -> swapWithinStaff(state, cand, rng)
-                        4 -> randomAllowedCell(state, cand, rng)
-                        else -> randomAllowedCell(state, cand, rng)  // op 5 handled in direct-eval path
+                        else -> destroyRepairViolations(state, cand, curReport, rng)
                     }
                     // hf67 only needed while hard violations are active.
                     val fixed = if (iter % 7L == 0L && curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand

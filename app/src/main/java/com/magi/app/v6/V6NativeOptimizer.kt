@@ -224,9 +224,9 @@ object V6NativeOptimizer {
             // [Adaptive LNS] learned operator weights (roulette-wheel selection + reaction-factor
             // update), per Ropke & Pisinger and recent adaptive-LNS personnel-scheduling work
             // (Ouberkouk, Boufflet & Moukrim, J. Heuristics 2023). Replaces uniform operator choice.
-            val opW = DoubleArray(5) { 1.0 }
-            val opScore = DoubleArray(5)
-            val opCnt = IntArray(5)
+            val opW = DoubleArray(6) { 1.0 }
+            val opScore = DoubleArray(6)
+            val opCnt = IntArray(6)
             var sinceUpdate = 0
             while (nowMs() < deadline) {
                 coroutineContext.ensureActive()
@@ -283,7 +283,14 @@ object V6NativeOptimizer {
                         1 -> destroyRepairStaff(state, cand, rng)
                         2 -> destroyRepairViolations(state, cand, curReport, rng)
                         3 -> swapWithinStaff(state, cand, rng)
-                        else -> randomAllowedCell(state, cand, rng)
+                        4 -> randomAllowedCell(state, cand, rng)
+                        else -> when (rng.nextInt(5)) {   // op 5: targeted single-cell repair
+                            0 -> polishCovO(p, cand, eval, rng)
+                            1 -> polishC2(p, cand, eval, rng)
+                            2 -> polishRangeLow(p, cand, eval, rng)
+                            3 -> polishC41(p, cand, eval, rng)
+                            else -> polishRangeHigh(p, cand, eval, rng)
+                        }
                     }
                     // hf67 only needed while hard violations are active.
                     val fixed = if (iter % 7L == 0L && curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand

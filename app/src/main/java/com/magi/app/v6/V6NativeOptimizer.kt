@@ -203,13 +203,22 @@ object V6NativeOptimizer {
         val per = max(1, budgetSec / restarts)
         var globalBest = normalizeSchedule(initial, p)
         var globalReport = UnifiedViolationChecker.check(state, globalBest)
+        // Incremental scoring: globalScore / curScore track DeltaEvaluator.score() —
+        // (hard_count * 1_000_000 + soft_count) — avoiding full check() in the hot loop.
+        val eval = DeltaEvaluator(p)
+        eval.reset(globalBest)
+        var globalScore = eval.score()
         var itersTotal = 0L
         val logs = ArrayList<MirrorLog>()
+        val diffBuf = IntArray(p.S * p.T)   // scratch: flat indices i*T+j of changed cells
         for (r in 0 until restarts) {
             coroutineContext.ensureActive()
             var cur = if (r == 0) globalBest.copy2D() else perturb(state, globalBest, rng, strength = 0.18)
             cur = hf67HardRepair(state, cur, rng).schedule
+            // Refresh curReport once per restart (needed for destroyRepairViolations operator).
             var curReport = UnifiedViolationChecker.check(state, cur)
+            eval.reset(cur)
+            var curScore = eval.score()
             val deadline = nowMs() + per * 1000L
             var iter = 0L
             // [Adaptive LNS] learned operator weights (roulette-wheel selection + reaction-factor
@@ -231,19 +240,33 @@ object V6NativeOptimizer {
                     else -> randomAllowedCell(state, cand, rng)
                 }
                 val fixed = if (iter % 7L == 0L) hf67HardRepair(state, cand, rng).schedule else cand
-                val rep = UnifiedViolationChecker.check(state, fixed)
+                // Apply cell-level diffs from cur→fixed to eval; cost O(changed × local_constraints)
+                // instead of O(S × T × K × constraints) from a full check().
+                val nDiffs = diffInto(p.T, cur, fixed, diffBuf)
+                for (idx in 0 until nDiffs) {
+                    val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, fixed[flat / p.T][flat % p.T])
+                }
+                val newScore = eval.score()
                 val temp = max(0.03, (deadline - nowMs()).toDouble() / max(1.0, per * 1000.0))
-                val improvedGlobal = better(rep, globalReport)
-                val improvedCur = better(rep, curReport)
-                val accepted = improvedCur || acceptWorse(rep, curReport, temp, rng)
+                val improvedGlobal = betterScore(newScore, globalScore)
+                val improvedCur = betterScore(newScore, curScore)
+                val accepted = improvedCur || acceptWorseScore(newScore, curScore, temp, rng)
                 if (accepted) {
                     cur = fixed
-                    curReport = rep
+                    curScore = newScore
                     if (improvedGlobal) {
                         globalBest = fixed.copy2D()
-                        globalReport = rep
+                        globalScore = newScore
+                        globalReport = UnifiedViolationChecker.check(state, fixed)
+                    }
+                } else {
+                    // Revert eval to match cur (undo the forward diffs).
+                    for (idx in 0 until nDiffs) {
+                        val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, cur[flat / p.T][flat % p.T])
                     }
                 }
+                // Refresh curReport every 200 iters so destroyRepairViolations has fresh hints.
+                if (iter % 200L == 0L) curReport = UnifiedViolationChecker.check(state, cur)
                 // reward: new global best > improving > accepted-worse > rejected
                 opScore[op] += if (improvedGlobal) 4.0 else if (improvedCur) 2.0 else if (accepted) 1.0 else 0.2
                 opCnt[op]++
@@ -442,11 +465,16 @@ object V6NativeOptimizer {
     private suspend fun hf80PostPolish(state: MagiState, initial: Array<IntArray>, seconds: Int, seed: Long): PolishResult {
         val started = nowMs()
         val rng = Random(seed)
+        val p = Problem.of(state)
         var best = initial.copy2D()
         var bestReport = UnifiedViolationChecker.check(state, best)
         var cur = best.copy2D()
-        var curReport = bestReport
+        val eval = DeltaEvaluator(p)
+        eval.reset(cur)
+        var curScore = eval.score()
+        var bestScore = curScore
         var iters = 0L
+        val diffBuf = IntArray(p.S * p.T)
         val deadline = nowMs() + seconds * 1000L
         while (nowMs() < deadline) {
             coroutineContext.ensureActive()
@@ -454,17 +482,28 @@ object V6NativeOptimizer {
             when (rng.nextInt(4)) {
                 0 -> swapWithinStaff(state, cand, rng)
                 1 -> randomAllowedCell(state, cand, rng)
-                2 -> destroyRepairViolations(state, cand, curReport, rng)
+                2 -> destroyRepairViolations(state, cand, bestReport, rng)
                 else -> destroyRepairDay(state, cand, rng)
             }
             val fixed = hf67HardRepair(state, cand, rng).schedule
-            val rep = UnifiedViolationChecker.check(state, fixed)
-            if (rep.hard <= bestReport.hard && (better(rep, curReport) || acceptWorse(rep, curReport, 0.15, rng))) {
+            val nDiffs = diffInto(p.T, cur, fixed, diffBuf)
+            for (idx in 0 until nDiffs) {
+                val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, fixed[flat / p.T][flat % p.T])
+            }
+            val newScore = eval.score()
+            val newHard = newScore / 1_000_000L
+            val bestHard = bestScore / 1_000_000L
+            if (newHard <= bestHard && (betterScore(newScore, curScore) || acceptWorseScore(newScore, curScore, 0.15, rng))) {
                 cur = fixed
-                curReport = rep
-                if (better(rep, bestReport)) {
+                curScore = newScore
+                if (betterScore(newScore, bestScore)) {
                     best = fixed.copy2D()
-                    bestReport = rep
+                    bestScore = newScore
+                    bestReport = UnifiedViolationChecker.check(state, fixed)
+                }
+            } else {
+                for (idx in 0 until nDiffs) {
+                    val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, cur[flat / p.T][flat % p.T])
                 }
             }
             iters++
@@ -616,6 +655,29 @@ object V6NativeOptimizer {
         if (a.hard > b.hard + 2) return false
         val delta = a.weightedScore - b.weightedScore
         return delta <= 0.0 || rng.nextDouble() < exp(-max(0.0, delta) / (200.0 * temp + 1e-9))
+    }
+
+    /** Compare two DeltaEvaluator scores (hard*1_000_000 + soft); lower is better. */
+    private fun betterScore(a: Long, b: Long): Boolean = a < b
+
+    /** SA acceptance for DeltaEvaluator scores. Guard: reject if candidate has >2 more hard violations. */
+    private fun acceptWorseScore(a: Long, b: Long, temp: Double, rng: Random): Boolean {
+        if (a > b + 2_000_000L) return false
+        val delta = (a - b).toDouble()
+        return delta <= 0.0 || rng.nextDouble() < exp(-max(0.0, delta) / (200.0 * temp + 1e-9))
+    }
+
+    /**
+     * Fills [buf] with flat indices (i * T + j) where from[i][j] != to[i][j].
+     * Returns the count of changed cells. Zero allocation in the hot loop.
+     */
+    private fun diffInto(T: Int, from: Array<IntArray>, to: Array<IntArray>, buf: IntArray): Int {
+        var n = 0
+        for (i in from.indices) {
+            val fr = from[i]; val tr = to[i]
+            for (j in 0 until T) if (fr[j] != tr[j]) buf[n++] = i * T + j
+        }
+        return n
     }
 
     private fun nowMs(): Long = System.nanoTime() / 1_000_000L

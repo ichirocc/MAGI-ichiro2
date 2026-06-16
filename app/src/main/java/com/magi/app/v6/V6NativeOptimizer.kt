@@ -231,45 +231,87 @@ object V6NativeOptimizer {
             while (nowMs() < deadline) {
                 coroutineContext.ensureActive()
                 val op = rouletteSelect(opW, rng)
-                val cand = cur.copy2D()
-                when (op) {
-                    0 -> destroyRepairDay(state, cand, rng)
-                    1 -> destroyRepairStaff(state, cand, rng)
-                    2 -> destroyRepairViolations(state, cand, curReport, rng)
-                    3 -> swapWithinStaff(state, cand, rng)
-                    else -> randomAllowedCell(state, cand, rng)
-                }
-                val fixed = if (iter % 7L == 0L) hf67HardRepair(state, cand, rng).schedule else cand
-                // Apply cell-level diffs from cur→fixed to eval; cost O(changed × local_constraints)
-                // instead of O(S × T × K × constraints) from a full check().
-                val nDiffs = diffInto(p.T, cur, fixed, diffBuf)
-                for (idx in 0 until nDiffs) {
-                    val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, fixed[flat / p.T][flat % p.T])
-                }
-                val newScore = eval.score()
                 val temp = max(0.03, (deadline - nowMs()).toDouble() / max(1.0, per * 1000.0))
-                val improvedGlobal = betterScore(newScore, globalScore)
-                val improvedCur = betterScore(newScore, curScore)
-                val accepted = improvedCur || acceptWorseScore(newScore, curScore, temp, rng)
-                if (accepted) {
-                    cur = fixed
-                    curScore = newScore
-                    if (improvedGlobal) {
-                        globalBest = fixed.copy2D()
-                        globalScore = newScore
-                        globalReport = UnifiedViolationChecker.check(state, fixed)
+                val curHard = curScore / 1_000_000L
+                var reward = 0.2   // default: rejected
+
+                // ── Direct-eval path (ops 3/4 when hard-feasible): no copy2D, no diffInto ──
+                // Applies the move straight to eval+cur; reverts on rejection.
+                // Invariant: eval.at(i,j) == cur[i][j] for all cells at all times.
+                if (curHard == 0L && (op == 3 || op == 4)) {
+                    var moved = false
+                    if (op == 3 && p.S > 0 && p.T >= 2) {          // swapWithinStaff
+                        val i = rng.nextInt(p.S)
+                        var ja = rng.nextInt(p.T); var jb = rng.nextInt(p.T)
+                        if (ja == jb) jb = (jb + 1) % p.T
+                        if (p.wish[i][ja] < 0 && p.wish[i][jb] < 0) {
+                            val ka = eval.at(i, ja); val kb = eval.at(i, jb)
+                            if (ka != kb) {
+                                eval.apply(i, ja, kb); eval.apply(i, jb, ka); moved = true
+                                val ns = eval.score()
+                                val ig = betterScore(ns, globalScore); val ic = betterScore(ns, curScore)
+                                if (ic || acceptWorseScore(ns, curScore, temp, rng)) {
+                                    cur[i][ja] = kb; cur[i][jb] = ka; curScore = ns
+                                    if (ig) { globalBest = cur.copy2D(); globalScore = ns; globalReport = UnifiedViolationChecker.check(state, cur) }
+                                    reward = if (ig) 4.0 else if (ic) 2.0 else 1.0
+                                } else { eval.apply(i, ja, ka); eval.apply(i, jb, kb) }
+                            }
+                        }
+                    } else if (op == 4 && p.S > 0 && p.T > 0) {    // randomAllowedCell
+                        val i = rng.nextInt(p.S); val j = rng.nextInt(p.T)
+                        if (p.wish[i][j] < 0) {
+                            val allowed = p.allowedShiftsForStaff(i)
+                            if (allowed.isNotEmpty()) {
+                                val oldK = eval.at(i, j); val nw = allowed[rng.nextInt(allowed.size)]
+                                eval.apply(i, j, nw); moved = true
+                                val ns = eval.score()
+                                val ig = betterScore(ns, globalScore); val ic = betterScore(ns, curScore)
+                                if (ic || acceptWorseScore(ns, curScore, temp, rng)) {
+                                    cur[i][j] = nw; curScore = ns
+                                    if (ig) { globalBest = cur.copy2D(); globalScore = ns; globalReport = UnifiedViolationChecker.check(state, cur) }
+                                    reward = if (ig) 4.0 else if (ic) 2.0 else 1.0
+                                } else { eval.apply(i, j, oldK) }
+                            }
+                        }
                     }
+                    if (moved) { opScore[op] += reward; opCnt[op]++ }
                 } else {
-                    // Revert eval to match cur (undo the forward diffs).
-                    for (idx in 0 until nDiffs) {
-                        val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, cur[flat / p.T][flat % p.T])
+                    // ── Copy-based path (multi-cell ops, or any op when still hard-infeasible) ──
+                    val cand = cur.copy2D()
+                    when (op) {
+                        0 -> destroyRepairDay(state, cand, rng)
+                        1 -> destroyRepairStaff(state, cand, rng)
+                        2 -> destroyRepairViolations(state, cand, curReport, rng)
+                        3 -> swapWithinStaff(state, cand, rng)
+                        else -> randomAllowedCell(state, cand, rng)
                     }
+                    // hf67 only needed while hard violations are active.
+                    val fixed = if (iter % 7L == 0L && curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand
+                    val nDiffs = diffInto(p.T, cur, fixed, diffBuf)
+                    for (idx in 0 until nDiffs) {
+                        val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, fixed[flat / p.T][flat % p.T])
+                    }
+                    val newScore = eval.score()
+                    val improvedGlobal = betterScore(newScore, globalScore)
+                    val improvedCur = betterScore(newScore, curScore)
+                    val accepted = improvedCur || acceptWorseScore(newScore, curScore, temp, rng)
+                    if (accepted) {
+                        cur = fixed; curScore = newScore
+                        if (improvedGlobal) {
+                            globalBest = fixed.copy2D(); globalScore = newScore
+                            globalReport = UnifiedViolationChecker.check(state, fixed)
+                        }
+                        reward = if (improvedGlobal) 4.0 else if (improvedCur) 2.0 else 1.0
+                    } else {
+                        for (idx in 0 until nDiffs) {
+                            val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, cur[flat / p.T][flat % p.T])
+                        }
+                    }
+                    opScore[op] += reward; opCnt[op]++
                 }
+
                 // Refresh curReport every 200 iters so destroyRepairViolations has fresh hints.
                 if (iter % 200L == 0L) curReport = UnifiedViolationChecker.check(state, cur)
-                // reward: new global best > improving > accepted-worse > rejected
-                opScore[op] += if (improvedGlobal) 4.0 else if (improvedCur) 2.0 else if (accepted) 1.0 else 0.2
-                opCnt[op]++
                 if (++sinceUpdate >= 64) {
                     for (k in opW.indices) {
                         if (opCnt[k] > 0) opW[k] = (0.8 * opW[k] + 0.2 * (opScore[k] / opCnt[k])).coerceAtLeast(0.05)
@@ -277,8 +319,7 @@ object V6NativeOptimizer {
                     }
                     sinceUpdate = 0
                 }
-                iter++
-                itersTotal++
+                iter++; itersTotal++
                 if (iter % 120L == 0L) {
                     onProgress("ALNS restart ${r + 1}/$restarts", globalReport, itersTotal, nowMs() - started)
                     yield()

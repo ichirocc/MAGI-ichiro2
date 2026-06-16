@@ -825,14 +825,26 @@ object V6NativeOptimizer {
         return if (other.isNotEmpty()) intArrayOf(i, j, other[rng.nextInt(other.size)]) else null
     }
 
-    /** Pick one of the 5 targeted fix types at random and return the target cell, or null. */
-    private fun findTargetedFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? = when (rng.nextInt(6)) {
-        0 -> findCovOFix(p, eval, rng)
-        1 -> findC2Fix(p, eval, rng)
-        2 -> findRangeLowFix(p, eval, rng)
-        3 -> findC41Fix(p, eval, rng)
-        4 -> findRangeHighFix(p, eval, rng)
-        else -> findC3WantFix(p, eval, rng)
+    /**
+     * Try all 6 targeted fix types in uniformly shuffled order, returning the first viable fix
+     * found. Falls through to the next finder if the primary returns null, so near-optimal
+     * solutions with only a few active violation families still get useful work per iteration.
+     */
+    private fun findTargetedFix(p: Problem, eval: DeltaEvaluator, rng: Random): IntArray? {
+        val order = IntArray(6) { it }
+        for (i in 5 downTo 1) { val j = rng.nextInt(i + 1); val t = order[i]; order[i] = order[j]; order[j] = t }
+        for (idx in order) {
+            val fix = when (idx) {
+                0 -> findCovOFix(p, eval, rng)
+                1 -> findC2Fix(p, eval, rng)
+                2 -> findRangeLowFix(p, eval, rng)
+                3 -> findC41Fix(p, eval, rng)
+                4 -> findRangeHighFix(p, eval, rng)
+                else -> findC3WantFix(p, eval, rng)
+            }
+            if (fix != null) return fix
+        }
+        return null
     }
 
     /**

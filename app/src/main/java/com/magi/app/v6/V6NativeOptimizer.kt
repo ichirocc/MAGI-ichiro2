@@ -663,11 +663,15 @@ object V6NativeOptimizer {
                 // --- Copy-based multi-cell destroy/repair (ops 9, 10) ---
                 else -> {
                     val cand = cur.copy2D()
-                    if (rng.nextBoolean()) destroyRepairViolations(state, cand, bestReport, rng)
-                    else destroyRepairDay(state, cand, rng)
+                    val drDay2 = if (rng.nextBoolean()) { destroyRepairViolations(state, cand, bestReport, rng); -1 }
+                                 else { val j = if (p.T > 0) rng.nextInt(p.T) else -1; if (j >= 0) destroyRepairDayAt(state, cand, j, rng); j }
                     // Skip hf67 when hard-feasible: DeltaEvaluator rejects any hard regression.
                     val fixed = if (curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand
-                    val nDiffs = diffInto(p.T, cur, fixed, diffBuf)
+                    val nDiffs = if (drDay2 >= 0 && fixed === cand) {
+                        var n = 0
+                        for (i in 0 until p.S) { if (cur[i][drDay2] != fixed[i][drDay2]) diffBuf[n++] = i * p.T + drDay2 }
+                        n
+                    } else diffInto(p.T, cur, fixed, diffBuf)
                     for (idx in 0 until nDiffs) {
                         val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, fixed[flat / p.T][flat % p.T])
                     }

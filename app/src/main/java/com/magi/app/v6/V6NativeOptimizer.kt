@@ -758,8 +758,7 @@ object V6NativeOptimizer {
         val defStaff = ArrayList<Int>(p.S)
         for (i in 0 until p.S) {
             if (!p.canDo(i, c.shiftIdx)) continue
-            var cnt = 0; for (j in 0 until p.T) if (eval.at(i, j) == c.shiftIdx) cnt++
-            if (cnt < c.count) defStaff.add(i)
+            if (eval.countForStaff(i, c.shiftIdx) < c.count) defStaff.add(i)
         }
         if (defStaff.isEmpty()) return null
         val i = defStaff[rng.nextInt(defStaff.size)]
@@ -774,8 +773,7 @@ object V6NativeOptimizer {
         for (i in 0 until p.S) for (k in 0 until p.K) {
             val lo = p.rangeLo[i][k]
             if (lo == Int.MIN_VALUE || !p.canDo(i, k)) continue
-            var cnt = 0; for (j in 0 until p.T) if (eval.at(i, j) == k) cnt++
-            if (cnt < lo) cands.add(i.toLong() * p.K + k)
+            if (eval.countForStaff(i, k) < lo) cands.add(i.toLong() * p.K + k)
         }
         if (cands.isEmpty()) return null
         val packed = cands[rng.nextInt(cands.size)]
@@ -814,8 +812,7 @@ object V6NativeOptimizer {
         val cands = ArrayList<Long>(p.S * p.K)
         for (i in 0 until p.S) for (k in 0 until p.K) {
             val hi = p.rangeHi[i][k]; if (hi == Int.MAX_VALUE) continue
-            var cnt = 0; for (j in 0 until p.T) if (eval.at(i, j) == k) cnt++
-            if (cnt > hi) cands.add(i.toLong() * p.K + k)
+            if (eval.countForStaff(i, k) > hi) cands.add(i.toLong() * p.K + k)
         }
         if (cands.isEmpty()) return null
         val packed = cands[rng.nextInt(cands.size)]
@@ -953,19 +950,6 @@ object V6NativeOptimizer {
         if (p.wish[i][j] >= 0) return
         val allowed = p.allowedShiftsForStaff(i)
         if (allowed.isNotEmpty()) schedule[i][j] = allowed[rng.nextInt(allowed.size)]
-    }
-
-    private fun swapWithinStaff(state: MagiState, schedule: Array<IntArray>, rng: Random) {
-        val p = Problem.of(state)
-        if (p.S == 0 || p.T < 2) return
-        val i = rng.nextInt(p.S)
-        var a = rng.nextInt(p.T)
-        var b = rng.nextInt(p.T)
-        if (a == b) b = (b + 1) % p.T
-        if (p.wish[i][a] >= 0 || p.wish[i][b] >= 0) return
-        val tmp = schedule[i][a]
-        schedule[i][a] = schedule[i][b]
-        schedule[i][b] = tmp
     }
 
     private fun perturb(state: MagiState, base: Array<IntArray>, rng: Random, strength: Double): Array<IntArray> {

@@ -5,11 +5,17 @@ on:
   push:
     branches:
       - main
-      - 'claude/**'
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - name: Checkout
@@ -32,10 +38,11 @@ jobs:
         run: sdkmanager "platform-tools" "platforms;android-36" "build-tools;35.0.0"
 
       - name: Build release APK
-        run: ./gradlew assembleRelease --no-daemon
+        run: ./gradlew assembleRelease --no-daemon -q
 
       - name: Upload release APK
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
+          name: app-release-${{ github.sha }}
           path: app/build/outputs/apk/release/*.apk
+          retention-days: 30

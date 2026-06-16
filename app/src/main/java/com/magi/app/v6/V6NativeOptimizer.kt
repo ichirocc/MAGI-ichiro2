@@ -308,14 +308,24 @@ object V6NativeOptimizer {
                 } else {
                     // ── Copy-based path (multi-cell ops 0/1/2 only) ──
                     val cand = cur.copy2D()
+                    // For destroyRepairDay, pick j here so we can do an O(S) column diff
+                    // instead of the full O(S*T) diffInto scan when hf67 is not triggered.
+                    val drDay = if (op == 0 && p.T > 0) rng.nextInt(p.T) else -1
                     when (op) {
-                        0 -> destroyRepairDay(state, cand, rng)
+                        0 -> destroyRepairDayAt(state, cand, drDay, rng)
                         1 -> destroyRepairStaff(state, cand, rng)
                         else -> destroyRepairViolations(state, cand, curReport, rng)
                     }
                     // hf67 only needed while hard violations are active.
                     val fixed = if (iter % 7L == 0L && curHard > 0L) hf67HardRepair(state, cand, rng).schedule else cand
-                    val nDiffs = diffInto(p.T, cur, fixed, diffBuf)
+                    val nDiffs = if (op == 0 && drDay >= 0 && fixed === cand) {
+                        // Column-only diff: only day drDay can have changed.
+                        var n = 0
+                        for (i in 0 until p.S) { if (cur[i][drDay] != fixed[i][drDay]) diffBuf[n++] = i * p.T + drDay }
+                        n
+                    } else {
+                        diffInto(p.T, cur, fixed, diffBuf)
+                    }
                     for (idx in 0 until nDiffs) {
                         val flat = diffBuf[idx]; eval.apply(flat / p.T, flat % p.T, fixed[flat / p.T][flat % p.T])
                     }
@@ -859,11 +869,15 @@ object V6NativeOptimizer {
     private fun destroyRepairDay(state: MagiState, schedule: Array<IntArray>, rng: Random) {
         val p = Problem.of(state)
         if (p.T == 0) return
-        val j = rng.nextInt(p.T)
+        destroyRepairDayAt(state, schedule, rng.nextInt(p.T), rng)
+    }
+
+    private fun destroyRepairDayAt(state: MagiState, schedule: Array<IntArray>, j: Int, rng: Random) {
+        val p = Problem.of(state)
         val order = ArrayList<Int>(p.S)
         for (idx in 0 until p.S) order.add(idx)
         java.util.Collections.shuffle(order, rng)
-        // Count coverage only for the selected day (O(S)) instead of all days (O(S*T)).
+        // Count coverage only for day j (O(S)) — avoids full T×K scan.
         val covJ = IntArray(p.K)
         for (i in 0 until p.S) { val k = schedule[i][j]; if (k in 0 until p.K) covJ[k]++ }
         for (k in 0 until p.K) {
